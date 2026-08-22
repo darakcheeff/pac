@@ -6,10 +6,38 @@ package vte
 #include <pcre2.h>
 #include <vte/vte.h>
 #include <gtk/gtk.h>
+#include <gdk/gdk.h>
+#include <gdk/gdkkeysyms.h>
 #include <pango/pango.h>
 
 static VteTerminal* TO_VTE_TERMINAL(GtkWidget* w) {
     return VTE_TERMINAL(w);
+}
+
+static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
+    // If Control or Alt is pressed, let accelerators / shortcuts handle it
+    if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
+        return FALSE;
+    }
+
+    // Intercept Tab / KP_Tab for terminal autocomplete and prevent GTK focus change
+    if (event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab) {
+        vte_terminal_feed_child(VTE_TERMINAL(widget), "\t", 1);
+        return TRUE; // Consume event completely
+    }
+
+    // Intercept Shift+Tab (Backtab)
+    if (event->keyval == GDK_KEY_ISO_Left_Tab) {
+        vte_terminal_feed_child(VTE_TERMINAL(widget), "\x1b[Z", 3);
+        return TRUE; // Consume event
+    }
+
+    return FALSE;
+}
+
+static void attach_vte_key_handler(GtkWidget* w) {
+    gtk_widget_set_can_focus(w, TRUE);
+    g_signal_connect(w, "key-press-event", G_CALLBACK(on_vte_key_press), NULL);
 }
 
 static gboolean set_terminal_pty_fd(GtkWidget* term, int fd, GError** error) {
@@ -104,6 +132,9 @@ func NewTerminal() (*Terminal, error) {
 	C.vte_terminal_set_scroll_on_keystroke(cTerm, C.TRUE)
 	C.vte_terminal_set_scrollback_lines(cTerm, 10000)
 
+	// Attach key-press listener to intercept Tab/KP_Tab and prevent GTK focus stealing
+	C.attach_vte_key_handler(cWidget)
+
 	// Wrap C GtkWidget into gotk3 *gtk.Widget properly via glib.Take
 	glibObj := glib.Take(unsafe.Pointer(cWidget))
 	gWidget := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: glibObj}}
@@ -116,6 +147,13 @@ func NewTerminal() (*Terminal, error) {
 
 	term.ApplyColorScheme("mate")
 	return term, nil
+}
+
+// GrabFocus gives keyboard focus directly to the terminal
+func (t *Terminal) GrabFocus() {
+	if t.Widget != nil {
+		t.Widget.GrabFocus()
+	}
 }
 
 // SetPTYFD attaches an open PTY file descriptor to the VTE terminal
@@ -137,6 +175,13 @@ func (t *Terminal) FeedText(text string) {
 	cStr := C.CString(text)
 	defer C.free(unsafe.Pointer(cStr))
 	C.vte_terminal_feed(t.vteTerm, cStr, C.gssize(len(text)))
+}
+
+// FeedChild writes raw string to the child PTY process (stdin)
+func (t *Terminal) FeedChild(text string) {
+	cStr := C.CString(text)
+	defer C.free(unsafe.Pointer(cStr))
+	C.vte_terminal_feed_child(t.vteTerm, cStr, C.gssize(len(text)))
 }
 
 // SetScrollbackLines updates maximum scrollback buffer depth

@@ -55,8 +55,13 @@ func NewTabView() (*TabView, error) {
 
 	nb.Connect("switch-page", func(_ *gtk.Notebook, page *gtk.Widget, pageNum uint) {
 		item, exists := tv.tabs[int(pageNum)]
-		if exists && tv.OnTabChanged != nil {
-			tv.OnTabChanged(item.Session)
+		if exists {
+			if item.Terminal != nil {
+				item.Terminal.GrabFocus()
+			}
+			if tv.OnTabChanged != nil {
+				tv.OnTabChanged(item.Session)
+			}
 		}
 	})
 
@@ -143,6 +148,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	})
 
 	tv.Notebook.SetCurrentPage(pageNum)
+	term.GrabFocus()
 	return item, nil
 }
 
@@ -199,6 +205,7 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 
 	item.ContentBox.ShowAll()
 	splitSearch.Hide()
+	newTerm.GrabFocus()
 	return nil
 }
 
