@@ -16,6 +16,33 @@ import (
 	"github.com/darakcheeff/pac/internal/storage"
 )
 
+// StreamSplitter splits output stream to PTY Slave, Logger, RingBuffer, and DirectoryTracker
+type StreamSplitter struct {
+	slave   io.Writer
+	logger  *SessionLogger
+	tracker *sftp.DirectoryTracker
+	sess    *Session
+}
+
+func (w *StreamSplitter) Write(p []byte) (n int, err error) {
+	if w.slave != nil {
+		n, err = w.slave.Write(p)
+	} else {
+		n = len(p)
+	}
+
+	if w.logger != nil {
+		_, _ = w.logger.Write(p)
+	}
+	if w.tracker != nil {
+		w.tracker.FeedBytes(p)
+	}
+	if w.sess != nil {
+		w.sess.appendScrollback(p)
+	}
+	return n, err
+}
+
 // Session represents an active terminal connection
 type Session struct {
 	ID         string
@@ -25,6 +52,7 @@ type Session struct {
 	Logger     *SessionLogger
 	SFTPClient *sftp.Client
 	Tracker    *sftp.DirectoryTracker
+	Splitter   *StreamSplitter
 
 	// Underlying session drivers
 	SSHSession    *ssh.SSHSession
@@ -75,10 +103,17 @@ func StartSession(ctx context.Context, host *storage.Host, title string, default
 		}
 	})
 
+	sess.Splitter = &StreamSplitter{
+		slave:   bridge.Slave,
+		logger:  logger,
+		tracker: sess.Tracker,
+		sess:    sess,
+	}
+
 	// Start protocol driver
 	switch host.Protocol {
 	case storage.ProtoSSH:
-		sshSess, err := ssh.ConnectSSH(ctx, host, bridge, nil)
+		sshSess, err := ssh.ConnectSSHWithOutput(ctx, host, bridge, sess.Splitter, nil)
 		if err != nil {
 			bridge.Close()
 			if logger != nil {
@@ -120,43 +155,7 @@ func StartSession(ctx context.Context, host *storage.Host, title string, default
 		sess.LocalSession = lSess
 	}
 
-	// Start stream monitor for logging, history ring buffer, and OSC 7 tracking
-	go sess.streamMonitor()
-
 	return sess, nil
-}
-
-func (s *Session) streamMonitor() {
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-		}
-
-		n, err := s.PTY.Slave.Read(buf)
-		if n > 0 {
-			chunk := buf[:n]
-
-			// 1. Write to Logger if active
-			if s.Logger != nil {
-				_, _ = s.Logger.Write(chunk)
-			}
-
-			// 2. Feed OSC 7 tracker
-			if s.Tracker != nil {
-				s.Tracker.FeedBytes(chunk)
-			}
-
-			// 3. Append to scrollback ring buffer (max 1 MB per session)
-			s.appendScrollback(chunk)
-		}
-
-		if err != nil {
-			return
-		}
-	}
 }
 
 func (s *Session) appendScrollback(data []byte) {

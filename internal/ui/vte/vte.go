@@ -71,6 +71,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -96,8 +97,9 @@ func NewTerminal() (*Terminal, error) {
 	C.vte_terminal_set_scroll_on_keystroke(cTerm, C.TRUE)
 	C.vte_terminal_set_scrollback_lines(cTerm, 10000)
 
-	// Wrap in gotk3 Widget
-	gWidget := (*gtk.Widget)(unsafe.Pointer(cWidget))
+	// Wrap C GtkWidget into gotk3 *gtk.Widget properly via glib.Take
+	glibObj := glib.Take(unsafe.Pointer(cWidget))
+	gWidget := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: glibObj}}
 
 	term := &Terminal{
 		Widget:    gWidget,

@@ -22,9 +22,6 @@ type SSHSession struct {
 	session        *ssh.Session
 	ptyBridge      *pty.PTYBridge
 	forwardManager *ForwardManager
-	stdinPipe      io.WriteCloser
-	stdoutPipe     io.Reader
-	stderrPipe     io.Reader
 	ctx            context.Context
 	cancel         context.CancelFunc
 	mu             sync.Mutex
@@ -33,6 +30,11 @@ type SSHSession struct {
 
 // ConnectSSH establishes SSH connection based on host profile
 func ConnectSSH(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, jumpClient *ssh.Client) (*SSHSession, error) {
+	return ConnectSSHWithOutput(ctx, host, bridge, bridge.Slave, jumpClient)
+}
+
+// ConnectSSHWithOutput establishes SSH connection and routes stdout/stderr to outputWriter
+func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, outputWriter io.Writer, jumpClient *ssh.Client) (*SSHSession, error) {
 	authMethods := []ssh.AuthMethod{}
 
 	// 1. SSH Agent
@@ -81,7 +83,7 @@ func ConnectSSH(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, 
 	config := &ssh.ClientConfig{
 		User:            host.Username,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // InsecureIgnoreHostKey for flexible connection management
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         10 * time.Second,
 	}
 
@@ -139,10 +141,15 @@ func ConnectSSH(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, 
 		_ = SetupX11Forwarding(client, session)
 	}
 
-	// Connect pipes to PTY Slave
+	// Connect pipes: user typing from bridge.Slave -> SSH stdin
 	session.Stdin = bridge.Slave
-	session.Stdout = bridge.Slave
-	session.Stderr = bridge.Slave
+	if outputWriter != nil {
+		session.Stdout = outputWriter
+		session.Stderr = outputWriter
+	} else {
+		session.Stdout = bridge.Slave
+		session.Stderr = bridge.Slave
+	}
 
 	if err := session.Shell(); err != nil {
 		session.Close()
