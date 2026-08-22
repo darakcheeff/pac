@@ -127,7 +127,18 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	app.setupMenuAndToolbar()
 	app.setupSignals()
 
-	// Background initializations: Migrate legacy config or Restore Saved Sessions
+	// Periodic auto-save of active session state (every 5 seconds)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if app.settings.AutoRestoreSessions {
+				_ = session.SaveState(app.store, app.manager.GetAll())
+			}
+		}
+	}()
+
+	// Background initializations: Migrate legacy config and restore saved sessions
 	go func() {
 		n, _ := migration.MigrateOldConfig(store, "")
 		glib.IdleAdd(func() {
@@ -135,7 +146,6 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 				app.HostTree.Reload()
 				app.StatusLabel.SetText(fmt.Sprintf("Импортировано %d хостов из старого Ásbrú", n))
 			}
-			// Restore saved sessions if enabled
 			if app.settings.AutoRestoreSessions {
 				app.RestoreSavedSessions()
 			}
@@ -381,6 +391,9 @@ func (app *AppWindow) setupSignals() {
 	app.TabView.OnTabClosed = func(sess *session.Session) {
 		if sess != nil {
 			app.manager.Unregister(sess.ID)
+			if app.settings.AutoRestoreSessions {
+				_ = session.SaveState(app.store, app.manager.GetAll())
+			}
 		}
 	}
 
@@ -429,6 +442,9 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 
 			_ = app.TabView.SplitActiveTab(tab, newSess, term, vertical)
 			app.StatusLabel.SetText("Экран успешно разделен")
+			if app.settings.AutoRestoreSessions {
+				_ = session.SaveState(app.store, app.manager.GetAll())
+			}
 		})
 	}()
 }
@@ -494,6 +510,10 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			}
 
 			app.StatusLabel.SetText(fmt.Sprintf("Подключено: %s (%s)", host.Name, host.Host))
+
+			if app.settings.AutoRestoreSessions {
+				_ = session.SaveState(app.store, app.manager.GetAll())
+			}
 		})
 	}()
 }
@@ -508,13 +528,23 @@ func (app *AppWindow) RestoreSavedSessions() {
 	app.StatusLabel.SetText(fmt.Sprintf("Восстановление %d сессий...", len(savedSessions)))
 
 	for _, st := range savedSessions {
-		host, err := app.store.GetHost(st.HostID)
-		if err != nil || host == nil {
-			continue
+		var h *storage.Host
+		if st.HostID != "" {
+			h, _ = app.store.GetHost(st.HostID)
+		}
+		if h == nil {
+			// Fallback local shell if host profile not found
+			h = &storage.Host{
+				ID:             st.HostID,
+				Name:           st.Title,
+				Protocol:       storage.ProtoLocal,
+				TerminalType:   "xterm-256color",
+				RestoreHistory: true,
+			}
 		}
 
-		go func(savedSt storage.SavedSessionState, h *storage.Host) {
-			sess, err := session.StartSession(context.Background(), h, savedSt.Title, app.settings.DefaultLogsDir)
+		go func(savedSt storage.SavedSessionState, host *storage.Host) {
+			sess, err := session.StartSession(context.Background(), host, savedSt.Title, app.settings.DefaultLogsDir)
 			glib.IdleAdd(func() {
 				if err != nil {
 					return
@@ -528,11 +558,11 @@ func (app *AppWindow) RestoreSavedSessions() {
 					return
 				}
 
-				if h.FontName != "" {
-					term.SetFont(h.FontName)
+				if host.FontName != "" {
+					term.SetFont(host.FontName)
 				}
-				if h.ColorScheme != "" {
-					term.ApplyColorScheme(h.ColorScheme)
+				if host.ColorScheme != "" {
+					term.ApplyColorScheme(host.ColorScheme)
 				}
 
 				// Restore history dump into VTE
@@ -550,10 +580,10 @@ func (app *AppWindow) RestoreSavedSessions() {
 				app.NotesPanel.LoadSessionNotes(sess)
 
 				if sess.SFTPClient != nil {
-					app.SFTPPanel.AttachClient(h.ID, sess.SFTPClient, app.settings.DefaultEditor)
+					app.SFTPPanel.AttachClient(host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
 			})
-		}(st, host)
+		}(st, h)
 	}
 }
 
