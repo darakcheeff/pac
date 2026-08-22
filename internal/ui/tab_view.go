@@ -4,6 +4,7 @@ import (
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/ui/vte"
 	"github.com/gotk3/gotk3/gdk"
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -111,8 +112,8 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		return false
 	})
 
-	// Context menu on terminal right click
-	term.Widget.Connect("button-press-event", func(_ *gtk.Widget, event *gdk.Event) bool {
+	// Context menu on terminal right click (use *glib.Object to safely accept VteTerminal sender)
+	term.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			tv.showTerminalContextMenu(item, btnEvent.Time())

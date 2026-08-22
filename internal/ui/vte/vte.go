@@ -75,6 +75,13 @@ import (
 	"github.com/gotk3/gotk3/gtk"
 )
 
+func init() {
+	// Register VteTerminal in gotk3 WrapMap to prevent reflection conversion panics
+	gtk.WrapMap["VteTerminal"] = func(obj *glib.Object) *gtk.Widget {
+		return &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: obj}}
+	}
+}
+
 // Terminal wraps VteTerminal C widget
 type Terminal struct {
 	*gtk.Widget

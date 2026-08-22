@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/darakcheeff/pac/internal/engine/pty"
+	engineSSH "github.com/darakcheeff/pac/internal/engine/ssh"
 	"github.com/darakcheeff/pac/internal/engine/watcher"
 	"github.com/darakcheeff/pac/internal/migration"
 	"github.com/darakcheeff/pac/internal/session"
@@ -14,6 +16,7 @@ import (
 	"github.com/darakcheeff/pac/internal/ui/vte"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
+	cryptoSsh "golang.org/x/crypto/ssh"
 )
 
 // AppWindow represents the primary application window
@@ -331,7 +334,20 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	app.StatusLabel.SetText("Подключение к " + host.Host + "...")
 
 	go func() {
-		sess, err := session.StartSession(context.Background(), host, host.Name, app.settings.DefaultLogsDir)
+		var jumpClient *cryptoSsh.Client
+		// Resolve Jump Host if specified
+		if host.ProxyJumpHost != "" {
+			if jumpHost, err := app.store.GetHost(host.ProxyJumpHost); err == nil && jumpHost != nil {
+				bridge, bErr := pty.Open()
+				if bErr == nil {
+					if jSess, jErr := engineSSH.ConnectSSH(context.Background(), jumpHost, bridge, nil); jErr == nil {
+						jumpClient = jSess.Client()
+					}
+				}
+			}
+		}
+
+		sess, err := session.StartSessionWithJump(context.Background(), host, host.Name, app.settings.DefaultLogsDir, jumpClient)
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка подключения: " + err.Error())

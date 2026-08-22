@@ -14,6 +14,7 @@ import (
 	"github.com/darakcheeff/pac/internal/engine/ssh"
 	"github.com/darakcheeff/pac/internal/engine/telnet"
 	"github.com/darakcheeff/pac/internal/storage"
+	cryptoSsh "golang.org/x/crypto/ssh"
 )
 
 // StreamSplitter splits output stream to PTY Slave, Logger, RingBuffer, and DirectoryTracker
@@ -73,6 +74,11 @@ type Session struct {
 
 // StartSession connects to host and attaches PTY and logging
 func StartSession(ctx context.Context, host *storage.Host, title string, defaultLogsDir string) (*Session, error) {
+	return StartSessionWithJump(ctx, host, title, defaultLogsDir, nil)
+}
+
+// StartSessionWithJump connects to host with optional Jump Bastion SSH client
+func StartSessionWithJump(ctx context.Context, host *storage.Host, title string, defaultLogsDir string, jumpClient *cryptoSsh.Client) (*Session, error) {
 	bridge, err := pty.Open()
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate pty: %w", err)
@@ -113,7 +119,7 @@ func StartSession(ctx context.Context, host *storage.Host, title string, default
 	// Start protocol driver
 	switch host.Protocol {
 	case storage.ProtoSSH:
-		sshSess, err := ssh.ConnectSSHWithOutput(ctx, host, bridge, sess.Splitter, nil)
+		sshSess, err := ssh.ConnectSSHWithOutput(ctx, host, bridge, sess.Splitter, jumpClient)
 		if err != nil {
 			bridge.Close()
 			if logger != nil {
