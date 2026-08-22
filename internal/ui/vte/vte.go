@@ -15,12 +15,12 @@ static VteTerminal* TO_VTE_TERMINAL(GtkWidget* w) {
 }
 
 static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
-    // If Control or Alt is pressed, let accelerators / shortcuts handle it
+    // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
     if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
         return FALSE;
     }
 
-    // Intercept Tab / KP_Tab for terminal autocomplete and prevent GTK focus change
+    // Intercept Tab / KP_Tab for terminal autocomplete and prevent GTK focus traversal
     if (event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab) {
         vte_terminal_feed_child(VTE_TERMINAL(widget), "\t", 1);
         return TRUE; // Consume event completely
@@ -35,8 +35,23 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
     return FALSE;
 }
 
-static void attach_vte_key_handler(GtkWidget* w) {
+static void configure_vte_terminal(GtkWidget* w) {
+    VteTerminal* term = VTE_TERMINAL(w);
+
     gtk_widget_set_can_focus(w, TRUE);
+    gtk_widget_set_can_default(w, TRUE);
+
+    vte_terminal_set_mouse_autohide(term, TRUE);
+    vte_terminal_set_bold_is_bright(term, TRUE);
+    vte_terminal_set_scroll_on_keystroke(term, TRUE);
+    vte_terminal_set_scroll_on_output(term, FALSE);
+    vte_terminal_set_scrollback_lines(term, 10000);
+    vte_terminal_set_backspace_binding(term, VTE_ERASE_AUTO);
+    vte_terminal_set_delete_binding(term, VTE_ERASE_DELETE_SEQUENCE);
+    vte_terminal_set_cursor_shape(term, VTE_CURSOR_SHAPE_BLOCK);
+    vte_terminal_set_cursor_blink_mode(term, VTE_CURSOR_BLINK_SYSTEM);
+    vte_terminal_set_audible_bell(term, FALSE);
+
     g_signal_connect(w, "key-press-event", G_CALLBACK(on_vte_key_press), NULL);
 }
 
@@ -117,7 +132,7 @@ type Terminal struct {
 	vteTerm   *C.VteTerminal
 }
 
-// NewTerminal creates a new VTE Terminal widget
+// NewTerminal creates a new VTE Terminal widget matching mate-terminal specifications
 func NewTerminal() (*Terminal, error) {
 	cWidget := C.vte_terminal_new()
 	if cWidget == nil {
@@ -126,14 +141,8 @@ func NewTerminal() (*Terminal, error) {
 
 	cTerm := C.TO_VTE_TERMINAL(cWidget)
 
-	// Set sensible defaults
-	C.vte_terminal_set_mouse_autohide(cTerm, C.TRUE)
-	C.vte_terminal_set_scroll_on_output(cTerm, C.FALSE)
-	C.vte_terminal_set_scroll_on_keystroke(cTerm, C.TRUE)
-	C.vte_terminal_set_scrollback_lines(cTerm, 10000)
-
-	// Attach key-press listener to intercept Tab/KP_Tab and prevent GTK focus stealing
-	C.attach_vte_key_handler(cWidget)
+	// Configure terminal defaults exactly like mate-terminal
+	C.configure_vte_terminal(cWidget)
 
 	// Wrap C GtkWidget into gotk3 *gtk.Widget properly via glib.Take
 	glibObj := glib.Take(unsafe.Pointer(cWidget))
