@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=PAC Connection Manager NextGen
+Comment=Advanced SSH, SFTP, Telnet, Serial and Remote Session Manager
+Exec=pac
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=Network;System;TerminalEmulator;
+Keywords=SSH;SFTP;Telnet;Serial;Terminal;Ásbrú;MobaXterm;

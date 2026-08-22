@@ -1,0 +1,25 @@
+# Binaries
+pac
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test and coverage artifacts
+*.out
+*.test
+*.prof
+
+# OS / Editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Database and logs
+*.db
+*.db-wal
+*.db-shm
+*.log
+logs/
