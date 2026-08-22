@@ -33,10 +33,10 @@ const (
 type AuthMethod string
 
 const (
-	AuthPassword  AuthMethod = "password"
-	AuthKey       AuthMethod = "key"
-	AuthAgent     AuthMethod = "agent"
-	AuthKeyboard  AuthMethod = "keyboard-interactive"
+	AuthPassword AuthMethod = "password"
+	AuthKey      AuthMethod = "key"
+	AuthAgent    AuthMethod = "agent"
+	AuthKeyboard AuthMethod = "keyboard-interactive"
 )
 
 // PortForward represents -L, -R, or -D port forwarding
@@ -58,13 +58,13 @@ type Host struct {
 	Port        int         `json:"port"`
 	Username    string      `json:"username"`
 	AuthMethod  AuthMethod  `json:"auth_method"`
-	Password    string      `json:"password,omitempty"`     // Keyring reference or encrypted
+	Password    string      `json:"password,omitempty"`
 	KeyPath     string      `json:"key_path,omitempty"`
 	KeyPass     string      `json:"key_pass,omitempty"`
-	
+
 	// SSH advanced options
 	X11Forwarding bool          `json:"x11_forwarding"`
-	ProxyJumpHost string        `json:"proxy_jump_host"` // HostID or user@bastion:port
+	ProxyJumpHost string        `json:"proxy_jump_host"`
 	PortForwards  []PortForward `json:"port_forwards"`
 	AutoSFTP      bool          `json:"auto_sftp"`
 
@@ -76,16 +76,16 @@ type Host struct {
 	SerialParity   string `json:"serial_parity"`
 
 	// Terminal / Appearance options
-	TerminalType    string `json:"terminal_type"` // e.g. "xterm-256color"
+	TerminalType    string `json:"terminal_type"`
 	FontName        string `json:"font_name"`
 	ColorScheme     string `json:"color_scheme"`
 	ScrollbackLines int    `json:"scrollback_lines"`
 
 	// Logging & History
-	EnableLogging bool   `json:"enable_logging"`
-	LogPathFormat string `json:"log_path_format"`
-	LogCleanANSI  bool   `json:"log_clean_ansi"`
-	RestoreHistory bool  `json:"restore_history"`
+	EnableLogging  bool   `json:"enable_logging"`
+	LogPathFormat  string `json:"log_path_format"`
+	LogCleanANSI   bool   `json:"log_clean_ansi"`
+	RestoreHistory bool   `json:"restore_history"`
 
 	// Notes
 	Notes string `json:"notes"`
@@ -106,18 +106,19 @@ type SavedSessionState struct {
 	SplitDirection string    `json:"split_direction"` // "none", "horizontal", "vertical"
 	WorkingDir     string    `json:"working_dir"`
 	ScrollbackDump string    `json:"scrollback_dump"` // Last N lines of history
+	Notes          string    `json:"notes"`           // Tab specific note
 	SavedAt        time.Time `json:"saved_at"`
 }
 
 // AppSettings represents global application configuration
 type AppSettings struct {
-	Theme               string `json:"theme"`                 // "system", "dark", "light"
-	DefaultFont         string `json:"default_font"`          // e.g. "Monospace 11"
-	DefaultColorScheme  string `json:"default_color_scheme"`   // "mate", "solarized-dark", "dracula", etc.
-	DefaultScrollback   int    `json:"default_scrollback"`    // default 10000
-	DefaultLogsDir      string `json:"default_logs_dir"`      // ~/logs/sessions
-	DefaultEditor       string `json:"default_editor"`        // "xed", "gedit", "code", or system default
-	AutoRestoreSessions bool   `json:"auto_restore_sessions"` // true
-	MasterPasswordHash  string `json:"master_password_hash"`  // for local AES fallback
+	Theme               string `json:"theme"`
+	DefaultFont         string `json:"default_font"`
+	DefaultColorScheme  string `json:"default_color_scheme"`
+	DefaultScrollback   int    `json:"default_scrollback"`
+	DefaultLogsDir      string `json:"default_logs_dir"`
+	DefaultEditor       string `json:"default_editor"`
+	AutoRestoreSessions bool   `json:"auto_restore_sessions"`
+	MasterPasswordHash  string `json:"master_password_hash"`
 	MasterPasswordSalt  string `json:"master_password_salt"`
 }

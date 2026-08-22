@@ -127,15 +127,19 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	app.setupMenuAndToolbar()
 	app.setupSignals()
 
-	// Migrate legacy config if found and db is fresh
+	// Background initializations: Migrate legacy config or Restore Saved Sessions
 	go func() {
 		n, _ := migration.MigrateOldConfig(store, "")
-		if n > 0 {
-			glib.IdleAdd(func() {
+		glib.IdleAdd(func() {
+			if n > 0 {
 				app.HostTree.Reload()
 				app.StatusLabel.SetText(fmt.Sprintf("Импортировано %d хостов из старого Ásbrú", n))
-			})
-		}
+			}
+			// Restore saved sessions if enabled
+			if app.settings.AutoRestoreSessions {
+				app.RestoreSavedSessions()
+			}
+		})
 	}()
 
 	return app, nil
@@ -238,6 +242,40 @@ func (app *AppWindow) setupMenuAndToolbar() {
 
 	app.MenuBar.Append(mView)
 
+	// Sessions Menu
+	mSessions, _ := gtk.MenuItemNewWithMnemonic("_Сессии")
+	sessMenu, _ := gtk.MenuNew()
+	mSessions.SetSubmenu(sessMenu)
+
+	mSplitHoriz, _ := gtk.MenuItemNewWithLabel("Разделить экран по горизонтали")
+	mSplitHoriz.Connect("activate", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil {
+			app.handleSplit(tab.Session, false)
+		}
+	})
+	sessMenu.Append(mSplitHoriz)
+
+	mSplitVert, _ := gtk.MenuItemNewWithLabel("Разделить экран по вертикали")
+	mSplitVert.Connect("activate", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil {
+			app.handleSplit(tab.Session, true)
+		}
+	})
+	sessMenu.Append(mSplitVert)
+
+	mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать сплит в новую вкладку")
+	mUnsplit.Connect("activate", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil {
+			app.TabView.UnsplitTab(tab)
+		}
+	})
+	sessMenu.Append(mUnsplit)
+
+	app.MenuBar.Append(mSessions)
+
 	// --- ToolBar Buttons ---
 	btnNew, _ := gtk.ToolButtonNew(nil, "Новое подключение")
 	btnNew.SetIconName("document-new-symbolic")
@@ -259,6 +297,26 @@ func (app *AppWindow) setupMenuAndToolbar() {
 
 	sepTool1, _ := gtk.SeparatorToolItemNew()
 	app.ToolBar.Insert(sepTool1, -1)
+
+	btnSplitH, _ := gtk.ToolButtonNew(nil, "Сплит H")
+	btnSplitH.SetIconName("view-paged-symbolic")
+	btnSplitH.Connect("clicked", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil {
+			app.handleSplit(tab.Session, false)
+		}
+	})
+	app.ToolBar.Insert(btnSplitH, -1)
+
+	btnSplitV, _ := gtk.ToolButtonNew(nil, "Сплит V")
+	btnSplitV.SetIconName("view-dual-symbolic")
+	btnSplitV.Connect("clicked", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil {
+			app.handleSplit(tab.Session, true)
+		}
+	})
+	app.ToolBar.Insert(btnSplitV, -1)
 
 	btnBroadcast, _ := gtk.ToolButtonNew(nil, "Кластерный ввод")
 	btnBroadcast.SetIconName("input-keyboard-symbolic")
@@ -309,12 +367,14 @@ func (app *AppWindow) setupSignals() {
 	}
 
 	app.TabView.OnTabChanged = func(sess *session.Session) {
-		if sess != nil && sess.Host != nil {
-			app.NotesPanel.LoadHostNotes(sess.Host)
-			if sess.SFTPClient != nil {
+		if sess != nil {
+			app.NotesPanel.LoadSessionNotes(sess)
+			if sess.SFTPClient != nil && sess.Host != nil {
 				app.SFTPPanel.AttachClient(sess.Host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 			}
-			app.StatusLabel.SetText(fmt.Sprintf("Сессия: %s (%s) | Протокол: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
+			if sess.Host != nil {
+				app.StatusLabel.SetText(fmt.Sprintf("Сессия: %s (%s) | Протокол: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
+			}
 		}
 	}
 
@@ -324,9 +384,53 @@ func (app *AppWindow) setupSignals() {
 		}
 	}
 
-	app.Window.Connect("destroy", func() {
+	app.TabView.OnSplitRequested = func(sess *session.Session, vertical bool) {
+		app.handleSplit(sess, vertical)
+	}
+
+	app.Window.Connect("delete-event", func() bool {
 		app.Quit()
+		return false
 	})
+}
+
+func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
+	if sess == nil || sess.Host == nil {
+		return
+	}
+	tab := app.TabView.GetCurrentTab()
+	if tab == nil {
+		return
+	}
+
+	go func() {
+		newSess, err := session.StartSession(context.Background(), sess.Host, sess.Title+" [сплит]", app.settings.DefaultLogsDir)
+		glib.IdleAdd(func() {
+			if err != nil {
+				app.StatusLabel.SetText("Ошибка создания сплита: " + err.Error())
+				return
+			}
+			app.manager.Register(newSess)
+
+			term, err := vte.NewTerminal()
+			if err != nil {
+				newSess.Close()
+				return
+			}
+			if sess.Host.FontName != "" {
+				term.SetFont(sess.Host.FontName)
+			}
+			if sess.Host.ColorScheme != "" {
+				term.ApplyColorScheme(sess.Host.ColorScheme)
+			}
+			if newSess.PTY != nil && newSess.PTY.Master != nil {
+				_ = term.SetPTYFD(int(newSess.PTY.Master.Fd()))
+			}
+
+			_ = app.TabView.SplitActiveTab(tab, newSess, term, vertical)
+			app.StatusLabel.SetText("Экран успешно разделен")
+		})
+	}()
 }
 
 // ConnectToHost opens a new session and attaches it to a new tab
@@ -383,7 +487,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 
 			// Add to notebook tab
 			_, _ = app.TabView.AddTab(sess, term)
-			app.NotesPanel.LoadHostNotes(host)
+			app.NotesPanel.LoadSessionNotes(sess)
 
 			if sess.SFTPClient != nil {
 				app.SFTPPanel.AttachClient(host.ID, sess.SFTPClient, app.settings.DefaultEditor)
@@ -392,6 +496,65 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			app.StatusLabel.SetText(fmt.Sprintf("Подключено: %s (%s)", host.Name, host.Host))
 		})
 	}()
+}
+
+// RestoreSavedSessions restores tabs and scrollback history from database
+func (app *AppWindow) RestoreSavedSessions() {
+	savedSessions, err := app.store.GetSavedSessions()
+	if err != nil || len(savedSessions) == 0 {
+		return
+	}
+
+	app.StatusLabel.SetText(fmt.Sprintf("Восстановление %d сессий...", len(savedSessions)))
+
+	for _, st := range savedSessions {
+		host, err := app.store.GetHost(st.HostID)
+		if err != nil || host == nil {
+			continue
+		}
+
+		go func(savedSt storage.SavedSessionState, h *storage.Host) {
+			sess, err := session.StartSession(context.Background(), h, savedSt.Title, app.settings.DefaultLogsDir)
+			glib.IdleAdd(func() {
+				if err != nil {
+					return
+				}
+				sess.Notes = savedSt.Notes
+				app.manager.Register(sess)
+
+				term, err := vte.NewTerminal()
+				if err != nil {
+					sess.Close()
+					return
+				}
+
+				if h.FontName != "" {
+					term.SetFont(h.FontName)
+				}
+				if h.ColorScheme != "" {
+					term.ApplyColorScheme(h.ColorScheme)
+				}
+
+				// Restore history dump into VTE
+				if savedSt.ScrollbackDump != "" {
+					header := session.FormatRestoredHistoryHeader(savedSt.SavedAt)
+					term.FeedText(savedSt.ScrollbackDump + header)
+				}
+
+				// Attach PTY
+				if sess.PTY != nil && sess.PTY.Master != nil {
+					_ = term.SetPTYFD(int(sess.PTY.Master.Fd()))
+				}
+
+				_, _ = app.TabView.AddTab(sess, term)
+				app.NotesPanel.LoadSessionNotes(sess)
+
+				if sess.SFTPClient != nil {
+					app.SFTPPanel.AttachClient(h.ID, sess.SFTPClient, app.settings.DefaultEditor)
+				}
+			})
+		}(st, host)
+	}
 }
 
 // Quit saves session states and exits cleanly

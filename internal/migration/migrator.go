@@ -3,6 +3,7 @@ package migration
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,32 +16,46 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LegacyNode represents a node in asbru/pac config
-type LegacyNode struct {
-	Name        string `yaml:"title"`
-	Parent      string `yaml:"parent"`
-	IsFolder    bool   `yaml:"is_folder"`
-	Description string `yaml:"description"`
-	Method      string `yaml:"method"`
-	IP          string `yaml:"ip"`
-	Port        int    `yaml:"port"`
-	User        string `yaml:"user"`
-	Pass        string `yaml:"pass"`
-	Key         string `yaml:"auth_key"`
-	Passphrase  string `yaml:"passphrase"`
-	Terminal    struct {
-		Font        string `yaml:"font"`
-		ColorScheme string `yaml:"color_scheme"`
-		Rows        int    `yaml:"rows"`
-		Columns     int    `yaml:"columns"`
-	} `yaml:"terminal"`
-	Log struct {
-		Enabled bool   `yaml:"enabled"`
-		File    string `yaml:"file"`
-	} `yaml:"log"`
-	X11Forward bool `yaml:"x11_forward"`
-	AutoSFTP   bool `yaml:"auto_sftp"`
-	Notes      string `yaml:"notes"`
+// DecodePACPassword handles various obfuscations used by PAC/Ásbrú
+func DecodePACPassword(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	// 1. Prefix __PAC__B64__
+	if strings.HasPrefix(raw, "__PAC__B64__") {
+		b64 := strings.TrimPrefix(raw, "__PAC__B64__")
+		if dec, err := base64.StdEncoding.DecodeString(b64); err == nil {
+			return string(dec)
+		}
+	}
+
+	// 2. Prefix __PAC__ENC__
+	if strings.HasPrefix(raw, "__PAC__ENC__") {
+		b64 := strings.TrimPrefix(raw, "__PAC__ENC__")
+		if dec, err := base64.StdEncoding.DecodeString(b64); err == nil {
+			return string(dec)
+		}
+	}
+
+	// 3. Raw Base64 string check
+	if len(raw)%4 == 0 && regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`).MatchString(raw) && len(raw) >= 8 {
+		if dec, err := base64.StdEncoding.DecodeString(raw); err == nil && isPrintable(dec) {
+			return string(dec)
+		}
+	}
+
+	return raw
+}
+
+func isPrintable(data []byte) bool {
+	for _, b := range data {
+		if b < 32 && b != '\t' && b != '\n' && b != '\r' {
+			return false
+		}
+	}
+	return true
 }
 
 // MigrateOldConfig scans standard paths for asbru.conf / pac.yml and imports into store
@@ -63,7 +78,7 @@ func MigrateOldConfig(store *storage.Store, configPath string) (int, error) {
 	}
 
 	if configPath == "" {
-		return 0, nil // No legacy config found
+		return 0, nil
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -71,7 +86,6 @@ func MigrateOldConfig(store *storage.Store, configPath string) (int, error) {
 		return 0, err
 	}
 
-	// Determine format: Perl Data::Dumper or YAML
 	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("$VAR1")) {
 		return importPerlDataDumper(store, string(data))
 	}
@@ -88,7 +102,6 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 	count := 0
 	environments, ok := root["environments"].(map[string]interface{})
 	if !ok {
-		// Try flat map
 		environments = root
 	}
 
@@ -123,12 +136,17 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 			continue
 		}
 
-		// It's a host
+		// Host
 		method, _ := nodeMap["method"].(string)
 		ip, _ := nodeMap["ip"].(string)
 		portVal := getInt(nodeMap["port"], 22)
 		user, _ := nodeMap["user"].(string)
-		pass, _ := nodeMap["pass"].(string)
+		passRaw, _ := nodeMap["pass"].(string)
+		if passRaw == "" {
+			passRaw, _ = nodeMap["password"].(string)
+		}
+		pass := DecodePACPassword(passRaw)
+
 		key, _ := nodeMap["auth_key"].(string)
 		desc, _ := nodeMap["description"].(string)
 		notes, _ := nodeMap["notes"].(string)
@@ -148,26 +166,28 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 		}
 
 		host := &storage.Host{
-			ID:             id,
-			GroupID:        parent,
-			Name:           title,
-			Description:    desc,
-			Protocol:       proto,
-			Host:           ip,
-			Port:           portVal,
-			Username:       user,
-			AuthMethod:     storage.AuthPassword,
-			Password:       pass,
-			KeyPath:        key,
-			AutoSFTP:       true,
-			TerminalType:   "xterm-256color",
+			ID:              id,
+			GroupID:         parent,
+			Name:            title,
+			Description:     desc,
+			Protocol:        proto,
+			Host:            ip,
+			Port:            portVal,
+			Username:        user,
+			AuthMethod:      storage.AuthPassword,
+			Password:        pass,
+			KeyPath:         key,
+			AutoSFTP:        true,
+			TerminalType:    "xterm-256color",
 			ScrollbackLines: 10000,
-			Notes:          notes,
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
+			LogCleanANSI:    true,
+			RestoreHistory:  true,
+			Notes:           notes,
+			CreatedAt:       time.Now(),
+			UpdatedAt:       time.Now(),
 		}
 
-		if key != "" {
+		if key != "" && pass == "" {
 			host.AuthMethod = storage.AuthKey
 		}
 
@@ -182,10 +202,10 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 	count := 0
 	scanner := bufio.NewScanner(strings.NewReader(content))
-	
+
 	var currentID string
 	var currentData = make(map[string]string)
-	
+
 	nodeRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*\{`)
 	kvRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*'([^']*)'`)
 	kvNumRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*([0-9]+)`)
@@ -218,24 +238,35 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 			if port == 0 {
 				port = 22
 			}
-			host := &storage.Host{
-				ID:          currentID,
-				GroupID:     parent,
-				Name:        title,
-				Description: currentData["description"],
-				Protocol:    storage.ProtoSSH,
-				Host:        currentData["ip"],
-				Port:        port,
-				Username:    currentData["user"],
-				AuthMethod:  storage.AuthPassword,
-				Password:    currentData["pass"],
-				KeyPath:     currentData["auth_key"],
-				AutoSFTP:    true,
-				Notes:       currentData["notes"],
-				CreatedAt:   time.Now(),
-				UpdatedAt:   time.Now(),
+
+			rawPass := currentData["pass"]
+			if rawPass == "" {
+				rawPass = currentData["password"]
 			}
-			if host.KeyPath != "" {
+			pass := DecodePACPassword(rawPass)
+
+			host := &storage.Host{
+				ID:              currentID,
+				GroupID:         parent,
+				Name:            title,
+				Description:     currentData["description"],
+				Protocol:        storage.ProtoSSH,
+				Host:            currentData["ip"],
+				Port:            port,
+				Username:        currentData["user"],
+				AuthMethod:      storage.AuthPassword,
+				Password:        pass,
+				KeyPath:         currentData["auth_key"],
+				AutoSFTP:        true,
+				TerminalType:    "xterm-256color",
+				ScrollbackLines: 10000,
+				LogCleanANSI:    true,
+				RestoreHistory:  true,
+				Notes:           currentData["notes"],
+				CreatedAt:       time.Now(),
+				UpdatedAt:       time.Now(),
+			}
+			if host.KeyPath != "" && pass == "" {
 				host.AuthMethod = storage.AuthKey
 			}
 			if err := store.SaveHost(host); err == nil {

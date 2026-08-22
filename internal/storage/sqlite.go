@@ -120,6 +120,7 @@ func (s *Store) initSchema() error {
 			split_direction TEXT DEFAULT "none",
 			working_dir TEXT,
 			scrollback_dump TEXT,
+			notes TEXT,
 			saved_at DATETIME
 		);`,
 		`CREATE TABLE IF NOT EXISTS app_settings (
@@ -379,7 +380,7 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`SELECT id, host_id, title, protocol, tab_index, split_parent_id,
-		split_direction, working_dir, scrollback_dump, saved_at
+		split_direction, working_dir, scrollback_dump, notes, saved_at
 		FROM saved_sessions ORDER BY tab_index`)
 	if err != nil {
 		return nil, err
@@ -392,7 +393,7 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 		if err := rows.Scan(
 			&state.ID, &state.HostID, &state.Title, &state.Protocol, &state.TabIndex,
 			&state.SplitParentID, &state.SplitDirection, &state.WorkingDir,
-			&state.ScrollbackDump, &state.SavedAt,
+			&state.ScrollbackDump, &state.Notes, &state.SavedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -417,8 +418,8 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 
 	stmt, err := tx.Prepare(`INSERT INTO saved_sessions (
 		id, host_id, title, protocol, tab_index, split_parent_id, split_direction,
-		working_dir, scrollback_dump, saved_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		working_dir, scrollback_dump, notes, saved_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -427,7 +428,7 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 	for _, st := range states {
 		if _, err := stmt.Exec(
 			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.SplitParentID,
-			st.SplitDirection, st.WorkingDir, st.ScrollbackDump, time.Now(),
+			st.SplitDirection, st.WorkingDir, st.ScrollbackDump, st.Notes, time.Now(),
 		); err != nil {
 			return err
 		}

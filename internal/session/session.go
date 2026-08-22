@@ -49,6 +49,7 @@ type Session struct {
 	ID         string
 	Host       *storage.Host
 	Title      string
+	Notes      string // Tab-specific note content
 	PTY        *pty.PTYBridge
 	Logger     *SessionLogger
 	SFTPClient *sftp.Client
@@ -91,6 +92,7 @@ func StartSessionWithJump(ctx context.Context, host *storage.Host, title string,
 		ID:        fmt.Sprintf("sess-%d", time.Now().UnixNano()),
 		Host:      host,
 		Title:     title,
+		Notes:     host.Notes,
 		PTY:       bridge,
 		Logger:    logger,
 		ctx:       ctx,

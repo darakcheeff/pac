@@ -35,6 +35,7 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 			TabIndex:       idx,
 			WorkingDir:     workingDir,
 			ScrollbackDump: scrollback,
+			Notes:          s.Notes,
 			SavedAt:        time.Now(),
 		})
 	}

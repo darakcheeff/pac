@@ -4,20 +4,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/gotk3/gotk3/gtk"
 )
 
 // NotesPanel represents the right-side collapsible session notes panel
 type NotesPanel struct {
-	Box         *gtk.Box
-	TextView    *gtk.TextView
-	TextBuffer  *gtk.TextBuffer
-	HeaderLabel *gtk.Label
-	currentHost *storage.Host
-	store       *storage.Store
-	saveTimer   *time.Timer
-	mu          sync.Mutex
+	Box            *gtk.Box
+	TextView       *gtk.TextView
+	TextBuffer     *gtk.TextBuffer
+	HeaderLabel    *gtk.Label
+	currentSession *session.Session
+	store          *storage.Store
+	saveTimer      *time.Timer
+	isUpdating     bool
+	mu             sync.Mutex
 }
 
 func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
@@ -33,7 +35,7 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 
 	// Header Bar
 	headerBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
-	titleLabel, _ := gtk.LabelNew("Заметки к сессии")
+	titleLabel, _ := gtk.LabelNew("Заметки к вкладке")
 	titleLabel.SetHAlign(gtk.ALIGN_START)
 	titleLabel.SetHExpand(true)
 
@@ -69,60 +71,66 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 		store:       store,
 	}
 
-	// Auto-save on change (debounced 500ms)
+	// Auto-save on change (debounced 300ms)
 	buf.Connect("changed", func() {
-		np.scheduleAutoSave()
+		if !np.isUpdating {
+			np.scheduleAutoSave()
+		}
 	})
 
 	clearBtn.Connect("clicked", func() {
-		buf.SetText("")
+		np.TextBuffer.SetText("")
 	})
 
 	return np, nil
 }
 
-// LoadHostNotes loads notes for the given host
-func (np *NotesPanel) LoadHostNotes(host *storage.Host) {
+// LoadSessionNotes loads notes for the active open session tab
+func (np *NotesPanel) LoadSessionNotes(sess *session.Session) {
 	np.mu.Lock()
-	np.currentHost = host
+	np.currentSession = sess
+	np.isUpdating = true
 	np.mu.Unlock()
 
-	if host == nil {
-		np.HeaderLabel.SetText("Заметки (нет активной сессии)")
+	defer func() {
+		np.mu.Lock()
+		np.isUpdating = false
+		np.mu.Unlock()
+	}()
+
+	if sess == nil {
+		np.HeaderLabel.SetText("Заметки (нет открытых вкладок)")
 		np.TextBuffer.SetText("")
 		np.TextView.SetSensitive(false)
 		return
 	}
 
 	np.TextView.SetSensitive(true)
-	np.HeaderLabel.SetText("Заметки: " + host.Name)
-
-	noteContent, err := np.store.GetNote(host.ID)
-	if err == nil {
-		np.TextBuffer.SetText(noteContent)
-	} else {
-		np.TextBuffer.SetText(host.Notes)
-	}
+	np.HeaderLabel.SetText("Заметки вкладки: " + sess.Title)
+	np.TextBuffer.SetText(sess.Notes)
 }
 
 func (np *NotesPanel) scheduleAutoSave() {
 	np.mu.Lock()
 	defer np.mu.Unlock()
 
-	if np.currentHost == nil {
+	if np.currentSession == nil {
 		return
 	}
+
+	startIter := np.TextBuffer.GetStartIter()
+	endIter := np.TextBuffer.GetEndIter()
+	text, _ := np.TextBuffer.GetText(startIter, endIter, true)
+	np.currentSession.Notes = text
 
 	if np.saveTimer != nil {
 		np.saveTimer.Stop()
 	}
 
-	hostID := np.currentHost.ID
-	startIter := np.TextBuffer.GetStartIter()
-	endIter := np.TextBuffer.GetEndIter()
-	text, _ := np.TextBuffer.GetText(startIter, endIter, true)
-
-	np.saveTimer = time.AfterFunc(500*time.Millisecond, func() {
-		_ = np.store.SaveNote(hostID, text)
+	sess := np.currentSession
+	np.saveTimer = time.AfterFunc(300*time.Millisecond, func() {
+		if sess.Host != nil {
+			_ = np.store.SaveNote(sess.Host.ID, text)
+		}
 	})
 }
