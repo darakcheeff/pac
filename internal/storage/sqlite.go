@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,6 +34,7 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to create config dir: %w", err)
 	}
 
+	log.Printf("[DB] Opening SQLite database at: %s", dbPath)
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
@@ -47,11 +49,17 @@ func NewStore(dbPath string) (*Store, error) {
 	return store, nil
 }
 
+// Path returns absolute database file path
+func (s *Store) Path() string {
+	return s.path
+}
+
 // Close closes the database connection
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db != nil {
+		log.Printf("[DB] Closing SQLite database.")
 		return s.db.Close()
 	}
 	return nil
@@ -137,7 +145,6 @@ func (s *Store) initSchema() error {
 		}
 	}
 
-	// Insert root group if empty
 	var count int
 	s.db.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 'root'").Scan(&count)
 	if count == 0 {
@@ -383,6 +390,7 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 		split_direction, working_dir, scrollback_dump, notes, saved_at
 		FROM saved_sessions ORDER BY tab_index`)
 	if err != nil {
+		log.Printf("[DB] ERROR querying saved_sessions: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -395,10 +403,12 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 			&state.SplitParentID, &state.SplitDirection, &state.WorkingDir,
 			&state.ScrollbackDump, &state.Notes, &state.SavedAt,
 		); err != nil {
+			log.Printf("[DB] ERROR scanning saved_sessions row: %v", err)
 			return nil, err
 		}
 		sessions = append(sessions, state)
 	}
+	log.Printf("[DB] GetSavedSessions loaded %d session state records from SQLite.", len(sessions))
 	return sessions, nil
 }
 

@@ -3,7 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/darakcheeff/pac/internal/engine/pty"
@@ -36,10 +38,12 @@ type AppWindow struct {
 	StatusBar    *gtk.Statusbar
 	StatusLabel  *gtk.Label
 
-	store      *storage.Store
-	manager    *session.Manager
-	watcherMgr *watcher.RemoteEditManager
-	settings   *storage.AppSettings
+	store       *storage.Store
+	manager     *session.Manager
+	watcherMgr  *watcher.RemoteEditManager
+	settings    *storage.AppSettings
+	isRestoring bool
+	restoreMu   sync.Mutex
 }
 
 func NewAppWindow(store *storage.Store) (*AppWindow, error) {
@@ -122,6 +126,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		manager:      manager,
 		watcherMgr:   watcherMgr,
 		settings:     settings,
+		isRestoring:  true, // Prevent overwriting state before restore completes
 	}
 
 	app.setupMenuAndToolbar()
@@ -132,22 +137,38 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			if app.settings.AutoRestoreSessions {
-				_ = session.SaveState(app.store, app.manager.GetAll())
+			app.restoreMu.Lock()
+			restoring := app.isRestoring
+			app.restoreMu.Unlock()
+
+			if !restoring && app.settings.AutoRestoreSessions {
+				activeList := app.manager.GetAll()
+				if len(activeList) > 0 {
+					_ = session.SaveState(app.store, activeList)
+				}
 			}
 		}
 	}()
 
-	// Background initializations: Migrate legacy config and restore saved sessions
+	// Background initialization: Migrate legacy config (if any) and restore saved sessions
 	go func() {
-		n, _ := migration.MigrateOldConfig(store, "")
+		n, err := migration.MigrateOldConfig(store, "")
 		glib.IdleAdd(func() {
+			if err != nil {
+				log.Printf("[MIGRATE] Error checking legacy config: %v", err)
+			}
 			if n > 0 {
 				app.HostTree.Reload()
 				app.StatusLabel.SetText(fmt.Sprintf("Импортировано %d хостов из старого Ásbrú", n))
 			}
+
+			// Restore saved sessions
 			if app.settings.AutoRestoreSessions {
 				app.RestoreSavedSessions()
+			} else {
+				app.restoreMu.Lock()
+				app.isRestoring = false
+				app.restoreMu.Unlock()
 			}
 		})
 	}()
@@ -390,6 +411,7 @@ func (app *AppWindow) setupSignals() {
 
 	app.TabView.OnTabClosed = func(sess *session.Session) {
 		if sess != nil {
+			log.Printf("[APP] Tab closed: %s (ID=%s)", sess.Title, sess.ID)
 			app.manager.Unregister(sess.ID)
 			if app.settings.AutoRestoreSessions {
 				_ = session.SaveState(app.store, app.manager.GetAll())
@@ -416,11 +438,13 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 		return
 	}
 
+	log.Printf("[APP] Splitting tab %q (vertical=%v)", sess.Title, vertical)
 	go func() {
 		newSess, err := session.StartSession(context.Background(), sess.Host, sess.Title+" [сплит]", app.settings.DefaultLogsDir)
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка создания сплита: " + err.Error())
+				log.Printf("[APP] ERROR creating split session: %v", err)
 				return
 			}
 			app.manager.Register(newSess)
@@ -451,12 +475,14 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 
 // ConnectToHost opens a new session and attaches it to a new tab
 func (app *AppWindow) ConnectToHost(host *storage.Host) {
+	log.Printf("[APP] ConnectToHost initiated for: %s (%s:%d, proto=%s)", host.Name, host.Host, host.Port, host.Protocol)
 	app.StatusLabel.SetText("Подключение к " + host.Host + "...")
 
 	go func() {
 		var jumpClient *cryptoSsh.Client
 		// Resolve Jump Host if specified
 		if host.ProxyJumpHost != "" {
+			log.Printf("[APP] ProxyJump configured: %s", host.ProxyJumpHost)
 			if jumpHost, err := app.store.GetHost(host.ProxyJumpHost); err == nil && jumpHost != nil {
 				bridge, bErr := pty.Open()
 				if bErr == nil {
@@ -471,6 +497,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка подключения: " + err.Error())
+				log.Printf("[APP] ERROR connecting to host %s: %v", host.Name, err)
 				return
 			}
 
@@ -479,6 +506,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			term, err := vte.NewTerminal()
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
+				log.Printf("[APP] ERROR creating VTE terminal: %v", err)
 				sess.Close()
 				return
 			}
@@ -510,6 +538,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			}
 
 			app.StatusLabel.SetText(fmt.Sprintf("Подключено: %s (%s)", host.Name, host.Host))
+			log.Printf("[APP] Successfully connected and opened tab for: %s (sessionID=%s)", host.Name, sess.ID)
 
 			if app.settings.AutoRestoreSessions {
 				_ = session.SaveState(app.store, app.manager.GetAll())
@@ -522,10 +551,18 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 func (app *AppWindow) RestoreSavedSessions() {
 	savedSessions, err := app.store.GetSavedSessions()
 	if err != nil || len(savedSessions) == 0 {
+		log.Printf("[RESTORE] No saved sessions found to restore.")
+		app.restoreMu.Lock()
+		app.isRestoring = false
+		app.restoreMu.Unlock()
 		return
 	}
 
+	log.Printf("[RESTORE] Restoring %d saved session(s)...", len(savedSessions))
 	app.StatusLabel.SetText(fmt.Sprintf("Восстановление %d сессий...", len(savedSessions)))
+
+	restoredCount := 0
+	totalCount := len(savedSessions)
 
 	for _, st := range savedSessions {
 		var h *storage.Host
@@ -533,7 +570,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 			h, _ = app.store.GetHost(st.HostID)
 		}
 		if h == nil {
-			// Fallback local shell if host profile not found
+			log.Printf("[RESTORE] HostID %q not found in DB, using fallback profile for %q", st.HostID, st.Title)
 			h = &storage.Host{
 				ID:             st.HostID,
 				Name:           st.Title,
@@ -544,9 +581,19 @@ func (app *AppWindow) RestoreSavedSessions() {
 		}
 
 		go func(savedSt storage.SavedSessionState, host *storage.Host) {
+			log.Printf("[RESTORE] Starting restored session for: %s (HostID=%s, proto=%s)", savedSt.Title, host.ID, host.Protocol)
 			sess, err := session.StartSession(context.Background(), host, savedSt.Title, app.settings.DefaultLogsDir)
 			glib.IdleAdd(func() {
+				restoredCount++
+				if restoredCount >= totalCount {
+					app.restoreMu.Lock()
+					app.isRestoring = false
+					app.restoreMu.Unlock()
+					log.Printf("[RESTORE] All %d sessions processed. isRestoring flag cleared.", totalCount)
+				}
+
 				if err != nil {
+					log.Printf("[RESTORE] ERROR starting session for %s: %v", savedSt.Title, err)
 					return
 				}
 				sess.Notes = savedSt.Notes
@@ -554,6 +601,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 				term, err := vte.NewTerminal()
 				if err != nil {
+					log.Printf("[RESTORE] ERROR creating VTE for %s: %v", savedSt.Title, err)
 					sess.Close()
 					return
 				}
@@ -569,6 +617,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 				if savedSt.ScrollbackDump != "" {
 					header := session.FormatRestoredHistoryHeader(savedSt.SavedAt)
 					term.FeedText(savedSt.ScrollbackDump + header)
+					log.Printf("[RESTORE] Fed %d bytes of scrollback history into VTE for %s", len(savedSt.ScrollbackDump), savedSt.Title)
 				}
 
 				// Attach PTY
@@ -582,6 +631,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 				if sess.SFTPClient != nil {
 					app.SFTPPanel.AttachClient(host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
+				log.Printf("[RESTORE] Restored tab successfully added for: %s", savedSt.Title)
 			})
 		}(st, h)
 	}
@@ -589,12 +639,14 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 // Quit saves session states and exits cleanly
 func (app *AppWindow) Quit() {
+	log.Printf("[APP] Application quit requested. Active sessions: %d", len(app.manager.GetAll()))
 	if app.settings.AutoRestoreSessions {
 		_ = session.SaveState(app.store, app.manager.GetAll())
 	}
 	app.manager.CloseAll()
 	_ = app.watcherMgr.Close()
 	_ = app.store.Close()
+	log.Printf("[APP] Exiting GTK main loop.")
 	gtk.MainQuit()
 	os.Exit(0)
 }

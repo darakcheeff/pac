@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/darakcheeff/pac/internal/storage"
@@ -12,12 +13,18 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 	var states []storage.SavedSessionState
 
 	for idx, s := range sessions {
-		if s == nil || s.Host == nil {
+		if s == nil {
 			continue
 		}
 
+		hostID := ""
+		protocol := storage.ProtoLocal
+		if s.Host != nil {
+			hostID = s.Host.ID
+			protocol = s.Host.Protocol
+		}
+
 		scrollback := s.GetScrollbackText()
-		// Limit to last 50 KB of scrollback
 		if len(scrollback) > 50*1024 {
 			scrollback = scrollback[len(scrollback)-50*1024:]
 		}
@@ -27,20 +34,30 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 			workingDir = s.SFTPClient.CurrentDir()
 		}
 
-		states = append(states, storage.SavedSessionState{
+		st := storage.SavedSessionState{
 			ID:             s.ID,
-			HostID:         s.Host.ID,
+			HostID:         hostID,
 			Title:          s.Title,
-			Protocol:       s.Host.Protocol,
+			Protocol:       protocol,
 			TabIndex:       idx,
 			WorkingDir:     workingDir,
 			ScrollbackDump: scrollback,
 			Notes:          s.Notes,
 			SavedAt:        time.Now(),
-		})
+		}
+		states = append(states, st)
+		log.Printf("[STATE] Prepared session to save: ID=%s, Title=%q, HostID=%s, Protocol=%s, ScrollbackBytes=%d",
+			st.ID, st.Title, st.HostID, st.Protocol, len(st.ScrollbackDump))
 	}
 
-	return store.SaveActiveSessions(states)
+	log.Printf("[STATE] Saving %d active session states to database...", len(states))
+	err := store.SaveActiveSessions(states)
+	if err != nil {
+		log.Printf("[STATE] ERROR saving active sessions: %v", err)
+	} else {
+		log.Printf("[STATE] Successfully saved %d session states to database.", len(states))
+	}
+	return err
 }
 
 // FormatRestoredHistoryHeader formats separator string for restored history buffer
