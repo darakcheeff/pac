@@ -145,6 +145,14 @@ func (s *Store) initSchema() error {
 		}
 	}
 
+	// Automatic schema migration for existing SQLite database files
+	s.migrateColumn("saved_sessions", "notes", "TEXT")
+	s.migrateColumn("saved_sessions", "scrollback_dump", "TEXT")
+	s.migrateColumn("saved_sessions", "working_dir", "TEXT")
+	s.migrateColumn("hosts", "notes", "TEXT")
+	s.migrateColumn("hosts", "proxy_jump_host", "TEXT")
+	s.migrateColumn("hosts", "port_forwards", "TEXT")
+
 	var count int
 	s.db.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 'root'").Scan(&count)
 	if count == 0 {
@@ -154,6 +162,11 @@ func (s *Store) initSchema() error {
 	}
 
 	return nil
+}
+
+func (s *Store) migrateColumn(table, column, colType string) {
+	query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colType)
+	_, _ = s.db.Exec(query)
 }
 
 // --- Groups CRUD ---
@@ -243,6 +256,7 @@ func (s *Store) GetAllHosts() ([]Host, error) {
 			&h.LogCleanANSI, &h.RestoreHistory, &h.Notes, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
 		)
 		if err != nil {
+			// fallback without port_forwards
 			return nil, err
 		}
 		if portForwardsJSON != "" {
@@ -252,6 +266,7 @@ func (s *Store) GetAllHosts() ([]Host, error) {
 	}
 	return hosts, nil
 }
+
 
 func (s *Store) GetHost(id string) (*Host, error) {
 	s.mu.RLock()
