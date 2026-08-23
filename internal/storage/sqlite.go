@@ -221,7 +221,7 @@ const hostSelectCols = `id, COALESCE(group_id, 'root'), name, COALESCE(descripti
 	COALESCE(password, ''), COALESCE(key_path, ''), COALESCE(key_pass, ''), COALESCE(x11_forwarding, 0), COALESCE(proxy_jump_host, ''), COALESCE(port_forwards, '[]'), COALESCE(auto_sftp, 1),
 	COALESCE(serial_port, ''), COALESCE(serial_baud_rate, 115200), COALESCE(serial_data_bits, 8), COALESCE(serial_stop_bits, 1), COALESCE(serial_parity, 'N'),
 	COALESCE(terminal_type, 'xterm-256color'), COALESCE(font_name, 'Monospace 11'), COALESCE(color_scheme, 'mate'), COALESCE(scrollback_lines, 10000), COALESCE(enable_logging, 0), COALESCE(log_path_format, ''),
-	COALESCE(log_clean_ansi, 1), COALESCE(restore_history, 1), COALESCE(notes, ''), COALESCE(sort_order, 0), COALESCE(created_at, CURRENT_TIMESTAMP), COALESCE(updated_at, CURRENT_TIMESTAMP)`
+	COALESCE(log_clean_ansi, 1), COALESCE(restore_history, 1), COALESCE(notes, ''), COALESCE(sort_order, 0), created_at, updated_at`
 
 func (s *Store) GetAllHosts() ([]Host, error) {
 	s.mu.RLock()
@@ -397,7 +397,7 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 		COALESCE(working_dir, ''),
 		COALESCE(scrollback_dump, ''),
 		COALESCE(notes, ''),
-		COALESCE(saved_at, CURRENT_TIMESTAMP)
+		saved_at
 		FROM saved_sessions ORDER BY tab_index`)
 	if err != nil {
 		log.Printf("[DB] ERROR querying saved_sessions: %v", err)
