@@ -66,6 +66,8 @@ type Session struct {
 	scrollback   []byte
 	scrollbackMu sync.RWMutex
 
+	lastRows  int
+	lastCols  int
 	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.Mutex
@@ -164,6 +166,29 @@ func StartSessionWithJump(ctx context.Context, host *storage.Host, title string,
 	}
 
 	return sess, nil
+}
+
+// Resize updates PTY window dimensions and propagates SIGWINCH / WindowChange to remote server
+func (s *Session) Resize(rows, cols int) {
+	if rows <= 0 || cols <= 0 {
+		return
+	}
+
+	s.mu.Lock()
+	if s.closed || (s.lastRows == rows && s.lastCols == cols) {
+		s.mu.Unlock()
+		return
+	}
+	s.lastRows = rows
+	s.lastCols = cols
+	s.mu.Unlock()
+
+	if s.PTY != nil {
+		_ = s.PTY.SetSize(pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	}
+	if s.SSHSession != nil {
+		_ = s.SSHSession.WindowChange(rows, cols)
+	}
 }
 
 func (s *Session) appendScrollback(data []byte) {

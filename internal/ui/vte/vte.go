@@ -14,6 +14,14 @@ static VteTerminal* TO_VTE_TERMINAL(GtkWidget* w) {
     return VTE_TERMINAL(w);
 }
 
+static glong get_terminal_row_count(GtkWidget* term) {
+    return vte_terminal_get_row_count(VTE_TERMINAL(term));
+}
+
+static glong get_terminal_column_count(GtkWidget* term) {
+    return vte_terminal_get_column_count(VTE_TERMINAL(term));
+}
+
 static void paste_clean_text(VteTerminal* term, GdkAtom selection) {
     GtkClipboard* clipboard = gtk_clipboard_get(selection);
     if (!clipboard) return;
@@ -151,6 +159,7 @@ type Terminal struct {
 	*gtk.Widget
 	vteWidget *C.GtkWidget
 	vteTerm   *C.VteTerminal
+	OnResize  func(rows, cols int)
 }
 
 // NewTerminal creates a new VTE Terminal widget matching mate-terminal specifications
@@ -175,8 +184,27 @@ func NewTerminal() (*Terminal, error) {
 		vteTerm:   cTerm,
 	}
 
+	// Connect size-allocate to notify Go of window resize and update SIGWINCH / PTY size
+	gWidget.Connect("size-allocate", func() {
+		rows := term.GetRowCount()
+		cols := term.GetColumnCount()
+		if rows > 0 && cols > 0 && term.OnResize != nil {
+			term.OnResize(rows, cols)
+		}
+	})
+
 	term.ApplyColorScheme("mate")
 	return term, nil
+}
+
+// GetRowCount returns current visible row count of terminal
+func (t *Terminal) GetRowCount() int {
+	return int(C.get_terminal_row_count(t.vteWidget))
+}
+
+// GetColumnCount returns current visible column count of terminal
+func (t *Terminal) GetColumnCount() int {
+	return int(C.get_terminal_column_count(t.vteWidget))
 }
 
 // GrabFocus gives keyboard focus directly to the terminal

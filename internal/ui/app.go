@@ -96,7 +96,8 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	mainBox.PackStart(leftRightPaned, true, true, 0)
 
-	// 4. Bottom Broadcast Bar
+	// 4. Bottom Broadcast Bar (Hidden by default, won't show with ShowAll)
+	broadcastBar.Box.SetNoShowAll(true)
 	mainBox.PackStart(broadcastBar.Box, false, false, 0)
 	broadcastBar.Box.Hide()
 
@@ -132,7 +133,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	app.setupMenuAndToolbar()
 	app.setupSignals()
 
-	// Periodic auto-save of active session state (every 5 seconds)
+	// Periodic auto-save of active session state (every 5 seconds with diff checking)
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -445,17 +446,30 @@ func (app *AppWindow) setupSignals() {
 }
 
 func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
-	if sess == nil || sess.Host == nil {
-		return
-	}
-	tab := app.TabView.GetCurrentTab()
+	tab := app.TabView.FindTabBySession(sess)
 	if tab == nil {
+		tab = app.TabView.GetCurrentTab()
+	}
+	if tab == nil {
+		log.Printf("[APP] Cannot split: no active tab found")
 		return
 	}
 
-	log.Printf("[APP] Splitting tab %q (vertical=%v)", sess.Title, vertical)
+	targetHost := sess.Host
+	if targetHost == nil {
+		targetHost = &storage.Host{
+			ID:           "local",
+			Name:         "Локальный терминал",
+			Protocol:     storage.ProtoLocal,
+			TerminalType: "xterm-256color",
+		}
+	}
+
+	log.Printf("[APP] Splitting tab %q for host %s (vertical=%v)", tab.Session.Title, targetHost.Name, vertical)
+	app.StatusLabel.SetText("Разделение экрана...")
+
 	go func() {
-		newSess, err := session.StartSession(context.Background(), sess.Host, sess.Title+" [сплит]", app.settings.DefaultLogsDir)
+		newSess, err := session.StartSession(context.Background(), targetHost, tab.Session.Title+" [сплит]", app.settings.DefaultLogsDir)
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка создания сплита: " + err.Error())
@@ -466,21 +480,38 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 
 			term, err := vte.NewTerminal()
 			if err != nil {
+				log.Printf("[APP] ERROR creating split terminal: %v", err)
 				newSess.Close()
 				return
 			}
-			if sess.Host.FontName != "" {
-				term.SetFont(sess.Host.FontName)
+			if targetHost.FontName != "" {
+				term.SetFont(targetHost.FontName)
+			} else if app.settings.DefaultFont != "" {
+				term.SetFont(app.settings.DefaultFont)
 			}
-			if sess.Host.ColorScheme != "" {
-				term.ApplyColorScheme(sess.Host.ColorScheme)
+			if targetHost.ColorScheme != "" {
+				term.ApplyColorScheme(targetHost.ColorScheme)
+			} else if app.settings.DefaultColorScheme != "" {
+				term.ApplyColorScheme(app.settings.DefaultColorScheme)
 			}
+
+			// Propagate window resize to PTY and remote SSH
+			term.OnResize = func(rows, cols int) {
+				newSess.Resize(rows, cols)
+			}
+
 			if newSess.PTY != nil && newSess.PTY.Master != nil {
 				_ = term.SetPTYFD(int(newSess.PTY.Master.Fd()))
 			}
 
-			_ = app.TabView.SplitActiveTab(tab, newSess, term, vertical)
-			app.StatusLabel.SetText("Экран успешно разделен")
+			err = app.TabView.SplitActiveTab(tab, newSess, term, vertical)
+			if err != nil {
+				log.Printf("[APP] ERROR in SplitActiveTab: %v", err)
+			} else {
+				app.StatusLabel.SetText("Экран успешно разделен")
+				log.Printf("[APP] Split created successfully")
+			}
+
 			if app.settings.AutoRestoreSessions {
 				_ = session.SaveState(app.store, app.manager.GetAll())
 			}
@@ -537,6 +568,11 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 				term.ApplyColorScheme(host.ColorScheme)
 			} else if app.settings.DefaultColorScheme != "" {
 				term.ApplyColorScheme(app.settings.DefaultColorScheme)
+			}
+
+			// Propagate window resize to PTY and remote SSH
+			term.OnResize = func(rows, cols int) {
+				sess.Resize(rows, cols)
 			}
 
 			// Attach PTY FD to VTE widget
@@ -626,6 +662,11 @@ func (app *AppWindow) RestoreSavedSessions() {
 				}
 				if host.ColorScheme != "" {
 					term.ApplyColorScheme(host.ColorScheme)
+				}
+
+				// Propagate window resize to PTY and remote SSH
+				term.OnResize = func(rows, cols int) {
+					sess.Resize(rows, cols)
 				}
 
 				// Restore history dump into VTE
