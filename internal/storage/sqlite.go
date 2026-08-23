@@ -147,6 +147,8 @@ func (s *Store) initSchema() error {
 
 	// Automatic schema migration for existing SQLite database files
 	s.migrateColumn("saved_sessions", "notes", "TEXT")
+	s.migrateColumn("saved_sessions", "split_parent_id", "TEXT")
+	s.migrateColumn("saved_sessions", "split_direction", "TEXT")
 	s.migrateColumn("saved_sessions", "scrollback_dump", "TEXT")
 	s.migrateColumn("saved_sessions", "working_dir", "TEXT")
 	s.migrateColumn("hosts", "notes", "TEXT")
