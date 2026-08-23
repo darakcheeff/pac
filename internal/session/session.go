@@ -168,7 +168,7 @@ func StartSessionWithJump(ctx context.Context, host *storage.Host, title string,
 	return sess, nil
 }
 
-// Resize updates PTY window dimensions and propagates SIGWINCH / WindowChange to remote server
+// Resize updates PTY window dimensions and propagates SIGWINCH / WindowChange to remote server non-blockingly
 func (s *Session) Resize(rows, cols int) {
 	if rows <= 0 || cols <= 0 {
 		return
@@ -187,7 +187,9 @@ func (s *Session) Resize(rows, cols int) {
 		_ = s.PTY.SetSize(pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	}
 	if s.SSHSession != nil {
-		_ = s.SSHSession.WindowChange(rows, cols)
+		go func(r, c int) {
+			_ = s.SSHSession.WindowChange(r, c)
+		}(rows, cols)
 	}
 }
 
