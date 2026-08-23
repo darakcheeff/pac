@@ -37,11 +37,13 @@ func areWidgetsEqual(w1, w2 gtk.IWidget) bool {
 
 // TerminalPane represents an individual terminal pane inside a tab
 type TerminalPane struct {
-	Session  *session.Session
-	Terminal *vte.Terminal
-	Box      *gtk.Box
-	Search   *SearchBar
-	TabItem  *TabItem
+	Session         *session.Session
+	Terminal        *vte.Terminal
+	Box             *gtk.Box
+	Search          *SearchBar
+	TabItem         *TabItem
+	ParentSessionID string
+	SplitDirection  string
 }
 
 // TabItem represents one open session tab inside the notebook (can hold multiple split panes)
@@ -250,6 +252,14 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 	paned.SetVExpand(true)
 
 	newPane := tv.createPane(item, newSess, newTerm)
+	if vertical {
+		newPane.SplitDirection = "vertical"
+	} else {
+		newPane.SplitDirection = "horizontal"
+	}
+	if targetPane != nil && targetPane.Session != nil {
+		newPane.ParentSessionID = targetPane.Session.ID
+	}
 
 	// Determine parent container of targetPane.Box
 	parentObj, pErr := targetPane.Box.GetParent()

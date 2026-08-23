@@ -148,10 +148,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 			app.restoreMu.Unlock()
 
 			if !restoring && app.settings.AutoRestoreSessions {
-				activeList := app.manager.GetAll()
-				if len(activeList) > 0 {
-					_ = session.SaveState(app.store, activeList)
-				}
+				app.SaveAllSessionState()
 			}
 		}
 	}()
@@ -441,7 +438,7 @@ func (app *AppWindow) setupSignals() {
 			log.Printf("[APP] Tab closed: %s (ID=%s)", sess.Title, sess.ID)
 			app.manager.Unregister(sess.ID)
 			if app.settings.AutoRestoreSessions {
-				_ = session.SaveState(app.store, app.manager.GetAll())
+				app.SaveAllSessionState()
 			}
 		}
 	}
@@ -534,7 +531,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			}
 
 			if app.settings.AutoRestoreSessions {
-				_ = session.SaveState(app.store, app.manager.GetAll())
+				app.SaveAllSessionState()
 			}
 		})
 	}()
@@ -615,7 +612,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			log.Printf("[APP] Successfully connected and opened tab for: %s (sessionID=%s)", host.Name, sess.ID)
 
 			if app.settings.AutoRestoreSessions {
-				_ = session.SaveState(app.store, app.manager.GetAll())
+				app.SaveAllSessionState()
 			}
 		})
 	}()
@@ -635,19 +632,41 @@ func (app *AppWindow) RestoreSavedSessions() {
 	log.Printf("[RESTORE] Restoring %d saved session(s)...", len(savedSessions))
 	app.StatusLabel.SetText(fmt.Sprintf("Восстановление %d сессий...", len(savedSessions)))
 
-	// Separate primary tabs and split children
-	var primaryStates []storage.SavedSessionState
-	var splitChildren []storage.SavedSessionState
+	// Group sessions by TabIndex
+	type tabGroup struct {
+		primary storage.SavedSessionState
+		splits  []storage.SavedSessionState
+	}
+
+	groups := make(map[int]*tabGroup)
+	var tabIndices []int
 
 	for _, st := range savedSessions {
-		if st.SplitParentID == "" || st.SplitParentID == "none" {
-			primaryStates = append(primaryStates, st)
+		g, exists := groups[st.TabIndex]
+		if !exists {
+			g = &tabGroup{}
+			groups[st.TabIndex] = g
+			tabIndices = append(tabIndices, st.TabIndex)
+		}
+		if st.SplitParentID == "" || st.SplitParentID == "none" || g.primary.ID == "" {
+			if g.primary.ID == "" {
+				g.primary = st
+			} else {
+				g.splits = append(g.splits, st)
+			}
 		} else {
-			splitChildren = append(splitChildren, st)
+			g.splits = append(g.splits, st)
 		}
 	}
 
-	for _, st := range primaryStates {
+	totalSessions := len(savedSessions)
+	restoredCount := 0
+
+	for _, tIdx := range tabIndices {
+		grp := groups[tIdx]
+		st := grp.primary
+		splits := grp.splits
+
 		var h *storage.Host
 		if st.HostID != "" {
 			h, _ = app.store.GetHost(st.HostID)
@@ -656,7 +675,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 			h = &storage.Host{
 				ID:             st.HostID,
 				Name:           st.Title,
-				Protocol:       storage.ProtoLocal,
+				Protocol:       st.Protocol,
 				TerminalType:   "xterm-256color",
 				RestoreHistory: true,
 			}
@@ -680,6 +699,8 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 		savedState := st
 		hostCopy := h
+		splitStates := splits
+
 		go func() {
 			sess, err := session.StartSessionWithBridge(context.Background(), hostCopy, savedState.Title, app.settings.DefaultLogsDir, bridge, nil)
 			glib.IdleAdd(func() {
@@ -705,22 +726,32 @@ func (app *AppWindow) RestoreSavedSessions() {
 					app.SFTPPanel.AttachClient(hostCopy.ID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
 
-				// Restore split children for this tab
-				for _, chState := range splitChildren {
-					if chState.SplitParentID == sess.ID || chState.TabIndex == savedState.TabIndex {
-						app.restoreSplitPane(tabItem, chState)
-					}
+				restoredCount++
+				if restoredCount >= totalSessions {
+					app.restoreMu.Lock()
+					app.isRestoring = false
+					app.restoreMu.Unlock()
+					log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
+				}
+
+				// Restore split children into this tabItem
+				for _, chState := range splitStates {
+					app.restoreSplitPane(tabItem, chState, func() {
+						restoredCount++
+						if restoredCount >= totalSessions {
+							app.restoreMu.Lock()
+							app.isRestoring = false
+							app.restoreMu.Unlock()
+							log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
+						}
+					})
 				}
 			})
 		}()
 	}
-
-	app.restoreMu.Lock()
-	app.isRestoring = false
-	app.restoreMu.Unlock()
 }
 
-func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSessionState) {
+func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSessionState, onDone func()) {
 	var h *storage.Host
 	if st.HostID != "" {
 		h, _ = app.store.GetHost(st.HostID)
@@ -729,7 +760,7 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 		h = &storage.Host{
 			ID:             st.HostID,
 			Name:           st.Title,
-			Protocol:       storage.ProtoLocal,
+			Protocol:       st.Protocol,
 			TerminalType:   "xterm-256color",
 			RestoreHistory: true,
 		}
@@ -737,10 +768,16 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 
 	term, err := vte.NewTerminal()
 	if err != nil {
+		if onDone != nil {
+			onDone()
+		}
 		return
 	}
 	slaveFile, err := term.SetupNativePTY()
 	if err != nil {
+		if onDone != nil {
+			onDone()
+		}
 		return
 	}
 	if h.FontName != "" {
@@ -754,7 +791,14 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 	go func() {
 		sess, err := session.StartSessionWithBridge(context.Background(), h, st.Title, app.settings.DefaultLogsDir, bridge, nil)
 		glib.IdleAdd(func() {
+			defer func() {
+				if onDone != nil {
+					onDone()
+				}
+			}()
+
 			if err != nil {
+				log.Printf("[RESTORE] ERROR restoring split session %s: %v", st.Title, err)
 				return
 			}
 			sess.ID = st.ID
@@ -775,7 +819,15 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 	}()
 }
 
+// SaveAllSessionState dumps current tab layout and all nested split panes into SQLite
 func (app *AppWindow) SaveAllSessionState() {
+	app.restoreMu.Lock()
+	if app.isRestoring {
+		app.restoreMu.Unlock()
+		return
+	}
+	app.restoreMu.Unlock()
+
 	var states []storage.SavedSessionState
 	for tabIdx, item := range app.TabView.items {
 		for paneIdx, pane := range item.Panes {
@@ -799,9 +851,15 @@ func (app *AppWindow) SaveAllSessionState() {
 			}
 			parentID := ""
 			splitDir := "none"
-			if paneIdx > 0 && len(item.Panes) > 0 && item.Panes[0].Session != nil {
-				parentID = item.Panes[0].Session.ID
-				splitDir = "vertical"
+			if paneIdx > 0 {
+				parentID = pane.ParentSessionID
+				if parentID == "" && len(item.Panes) > 0 && item.Panes[0].Session != nil {
+					parentID = item.Panes[0].Session.ID
+				}
+				splitDir = pane.SplitDirection
+				if splitDir == "" {
+					splitDir = "horizontal"
+				}
 			}
 
 			st := storage.SavedSessionState{
@@ -820,6 +878,7 @@ func (app *AppWindow) SaveAllSessionState() {
 			states = append(states, st)
 		}
 	}
+	log.Printf("[STATE] Saving %d active pane(s) across %d tab(s) to SQLite...", len(states), len(app.TabView.items))
 	_ = app.store.SaveActiveSessions(states)
 }
 
@@ -827,7 +886,7 @@ func (app *AppWindow) SaveAllSessionState() {
 func (app *AppWindow) Quit() {
 	log.Printf("[APP] Application quit requested. Active sessions: %d", len(app.manager.GetAll()))
 	if app.settings.AutoRestoreSessions {
-		_ = session.SaveState(app.store, app.manager.GetAll())
+		app.SaveAllSessionState()
 	}
 	app.manager.CloseAll()
 	_ = app.watcherMgr.Close()
