@@ -90,15 +90,15 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	// Completely unrestricted sizing for all dividers: resize=true, shrink=true
 	leftPaned.Pack1(hostTree.Box, true, true)
 	leftPaned.Pack2(sftpPanel.Box, true, true)
-	leftPaned.SetPosition(300)
+	leftPaned.SetPosition(250)
 
 	rightPaned.Pack1(tabView.Notebook, true, true)
 	rightPaned.Pack2(notesPanel.Box, true, true)
-	rightPaned.SetPosition(800)
+	rightPaned.SetPosition(550)
 
 	leftRightPaned.Pack1(leftPaned, true, true)
 	leftRightPaned.Pack2(rightPaned, true, true)
-	leftRightPaned.SetPosition(260)
+	leftRightPaned.SetPosition(250)
 
 	mainBox.PackStart(leftRightPaned, true, true, 0)
 

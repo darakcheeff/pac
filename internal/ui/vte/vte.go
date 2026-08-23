@@ -237,6 +237,7 @@ func NewTerminal() (*Terminal, error) {
 	})
 
 	term.ApplyColorScheme("mate")
+	term.Widget.SetSizeRequest(10, 10)
 	return term, nil
 }
 

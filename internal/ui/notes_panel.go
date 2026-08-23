@@ -7,6 +7,7 @@ import (
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/gotk3/gotk3/pango"
 )
 
 // NotesPanel represents the right-side collapsible session notes panel
@@ -39,6 +40,8 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 	titleLabel, _ := gtk.LabelNew("Заметки к вкладке")
 	titleLabel.SetHAlign(gtk.ALIGN_START)
 	titleLabel.SetHExpand(true)
+	titleLabel.SetEllipsize(pango.ELLIPSIZE_END)
+	titleLabel.SetMaxWidthChars(15)
 
 	clearBtn, _ := gtk.ButtonNewFromIconName("edit-clear-symbolic", gtk.ICON_SIZE_BUTTON)
 	clearBtn.SetTooltipText("Очистить текст заметки")

@@ -11,6 +11,7 @@ import (
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/gotk3/gotk3/pango"
 )
 
 const (
@@ -76,6 +77,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	pathEntry.SetPlaceholderText("/remote/path")
 	pathEntry.SetTooltipText("Текущий путь на удаленном сервере (введите путь и нажмите Enter)")
 	pathEntry.SetHExpand(true)
+	pathEntry.SetWidthChars(5)
 	topBox.PackStart(pathEntry, true, true, 0)
 
 	box.PackStart(topBox, false, false, 0)
@@ -102,14 +104,14 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	rSize, _ := gtk.CellRendererTextNew()
 	colSize, _ := gtk.TreeViewColumnNewWithAttribute("Размер", rSize, "text", SFTPColSize)
 	colSize.SetResizable(true)
-	colSize.SetMinWidth(70)
+	colSize.SetMinWidth(30)
 	treeView.AppendColumn(colSize)
 
 	// Column: ModTime (Дата изменения)
 	rTime, _ := gtk.CellRendererTextNew()
 	colTime, _ := gtk.TreeViewColumnNewWithAttribute("Дата изменения", rTime, "text", SFTPColTime)
 	colTime.SetResizable(true)
-	colTime.SetMinWidth(120)
+	colTime.SetMinWidth(30)
 	treeView.AppendColumn(colTime)
 
 	// Scrolled container
@@ -127,6 +129,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 
 	statusLabel, _ := gtk.LabelNew("Готово")
 	statusLabel.SetHAlign(gtk.ALIGN_START)
+	statusLabel.SetEllipsize(pango.ELLIPSIZE_END)
 	progressBox.PackStart(statusLabel, false, false, 0)
 
 	pBar, _ := gtk.ProgressBarNew()
