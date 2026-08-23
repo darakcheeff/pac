@@ -73,8 +73,13 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	// 3. Center Workspace Paneds
 	leftRightPaned, _ := gtk.PanedNew(gtk.ORIENTATION_HORIZONTAL)
+	leftRightPaned.SetWideHandle(true)
+
 	leftPaned, _ := gtk.PanedNew(gtk.ORIENTATION_VERTICAL)
+	leftPaned.SetWideHandle(true)
+
 	rightPaned, _ := gtk.PanedNew(gtk.ORIENTATION_HORIZONTAL)
+	rightPaned.SetWideHandle(true)
 
 	hostTree, _ := NewHostTree(store)
 	sftpPanel, _ := NewSFTPPanel(watcherMgr)
@@ -82,17 +87,17 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	notesPanel, _ := NewNotesPanel(store)
 	broadcastBar, _ := NewBroadcastBar(manager)
 
-	leftPaned.Pack1(hostTree.Box, false, false)
-	leftPaned.Pack2(sftpPanel.Box, true, false)
+	leftPaned.Pack1(hostTree.Box, true, true)
+	leftPaned.Pack2(sftpPanel.Box, true, true)
 	leftPaned.SetPosition(320)
 
-	rightPaned.Pack1(tabView.Notebook, true, false)
-	rightPaned.Pack2(notesPanel.Box, false, false)
-	rightPaned.SetPosition(750)
+	rightPaned.Pack1(tabView.Notebook, true, true)
+	rightPaned.Pack2(notesPanel.Box, true, true)
+	rightPaned.SetPosition(800)
 
-	leftRightPaned.Pack1(leftPaned, false, false)
-	leftRightPaned.Pack2(rightPaned, true, false)
-	leftRightPaned.SetPosition(260)
+	leftRightPaned.Pack1(leftPaned, true, true)
+	leftRightPaned.Pack2(rightPaned, true, true)
+	leftRightPaned.SetPosition(280)
 
 	mainBox.PackStart(leftRightPaned, true, true, 0)
 
@@ -616,7 +621,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	}()
 }
 
-// RestoreSavedSessions restores tabs and scrollback history from database
+// RestoreSavedSessions restores tabs and nested split panes from database
 func (app *AppWindow) RestoreSavedSessions() {
 	savedSessions, err := app.store.GetSavedSessions()
 	if err != nil || len(savedSessions) == 0 {
@@ -630,16 +635,24 @@ func (app *AppWindow) RestoreSavedSessions() {
 	log.Printf("[RESTORE] Restoring %d saved session(s)...", len(savedSessions))
 	app.StatusLabel.SetText(fmt.Sprintf("Восстановление %d сессий...", len(savedSessions)))
 
-	restoredCount := 0
-	totalCount := len(savedSessions)
+	// Separate primary tabs and split children
+	var primaryStates []storage.SavedSessionState
+	var splitChildren []storage.SavedSessionState
 
 	for _, st := range savedSessions {
+		if st.SplitParentID == "" || st.SplitParentID == "none" {
+			primaryStates = append(primaryStates, st)
+		} else {
+			splitChildren = append(splitChildren, st)
+		}
+	}
+
+	for _, st := range primaryStates {
 		var h *storage.Host
 		if st.HostID != "" {
 			h, _ = app.store.GetHost(st.HostID)
 		}
 		if h == nil {
-			log.Printf("[RESTORE] HostID %q not found in DB, using fallback profile for %q", st.HostID, st.Title)
 			h = &storage.Host{
 				ID:             st.HostID,
 				Name:           st.Title,
@@ -651,70 +664,163 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 		term, err := vte.NewTerminal()
 		if err != nil {
-			log.Printf("[RESTORE] ERROR creating VTE terminal: %v", err)
 			continue
 		}
 		slaveFile, err := term.SetupNativePTY()
 		if err != nil {
-			log.Printf("[RESTORE] ERROR initializing PTY: %v", err)
 			continue
 		}
-
 		if h.FontName != "" {
 			term.SetFont(h.FontName)
-		} else if app.settings.DefaultFont != "" {
-			term.SetFont(app.settings.DefaultFont)
 		}
-
 		if h.ColorScheme != "" {
 			term.ApplyColorScheme(h.ColorScheme)
-		} else if app.settings.DefaultColorScheme != "" {
-			term.ApplyColorScheme(app.settings.DefaultColorScheme)
 		}
-
 		bridge := pty.FromSlave(slaveFile)
 
-		go func(savedSt storage.SavedSessionState, host *storage.Host, vteTerm *vte.Terminal, ptyBr *pty.PTYBridge) {
-			log.Printf("[RESTORE] Starting restored session for: %s (HostID=%s, proto=%s)", savedSt.Title, host.ID, host.Protocol)
-			sess, err := session.StartSessionWithBridge(context.Background(), host, savedSt.Title, app.settings.DefaultLogsDir, ptyBr, nil)
+		savedState := st
+		hostCopy := h
+		go func() {
+			sess, err := session.StartSessionWithBridge(context.Background(), hostCopy, savedState.Title, app.settings.DefaultLogsDir, bridge, nil)
 			glib.IdleAdd(func() {
-				restoredCount++
-				if restoredCount >= totalCount {
-					app.restoreMu.Lock()
-					app.isRestoring = false
-					app.restoreMu.Unlock()
-					log.Printf("[RESTORE] All %d sessions processed. isRestoring flag cleared.", totalCount)
-				}
-
 				if err != nil {
-					log.Printf("[RESTORE] ERROR starting session for %s: %v", savedSt.Title, err)
+					log.Printf("[RESTORE] ERROR starting session for %s: %v", savedState.Title, err)
 					return
 				}
-				sess.Notes = savedSt.Notes
+				sess.ID = savedState.ID
+				sess.Notes = savedState.Notes
 				app.manager.Register(sess)
 
-				// Propagate window resize to PTY and remote SSH
-				vteTerm.OnResize = func(rows, cols int) {
+				term.OnResize = func(rows, cols int) {
 					sess.Resize(rows, cols)
 				}
-
-				// Restore history dump into VTE
-				if savedSt.ScrollbackDump != "" {
-					header := session.FormatRestoredHistoryHeader(savedSt.SavedAt)
-					vteTerm.FeedText(savedSt.ScrollbackDump + header)
-					log.Printf("[RESTORE] Fed %d bytes of scrollback history into VTE for %s", len(savedSt.ScrollbackDump), savedSt.Title)
+				if savedState.ScrollbackDump != "" {
+					header := session.FormatRestoredHistoryHeader(savedState.SavedAt)
+					term.FeedText(savedState.ScrollbackDump + header)
 				}
 
-				_, _ = app.TabView.AddTab(sess, vteTerm)
+				tabItem, _ := app.TabView.AddTab(sess, term)
 				app.NotesPanel.LoadSessionNotes(sess)
-
 				if sess.SFTPClient != nil {
-					app.SFTPPanel.AttachClient(host.ID, sess.SFTPClient, app.settings.DefaultEditor)
+					app.SFTPPanel.AttachClient(hostCopy.ID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
-				log.Printf("[RESTORE] Restored tab successfully added for: %s", savedSt.Title)
+
+				// Restore split children for this tab
+				for _, chState := range splitChildren {
+					if chState.SplitParentID == sess.ID || chState.TabIndex == savedState.TabIndex {
+						app.restoreSplitPane(tabItem, chState)
+					}
+				}
 			})
-		}(st, h, term, bridge)
+		}()
 	}
+
+	app.restoreMu.Lock()
+	app.isRestoring = false
+	app.restoreMu.Unlock()
+}
+
+func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSessionState) {
+	var h *storage.Host
+	if st.HostID != "" {
+		h, _ = app.store.GetHost(st.HostID)
+	}
+	if h == nil {
+		h = &storage.Host{
+			ID:             st.HostID,
+			Name:           st.Title,
+			Protocol:       storage.ProtoLocal,
+			TerminalType:   "xterm-256color",
+			RestoreHistory: true,
+		}
+	}
+
+	term, err := vte.NewTerminal()
+	if err != nil {
+		return
+	}
+	slaveFile, err := term.SetupNativePTY()
+	if err != nil {
+		return
+	}
+	if h.FontName != "" {
+		term.SetFont(h.FontName)
+	}
+	if h.ColorScheme != "" {
+		term.ApplyColorScheme(h.ColorScheme)
+	}
+	bridge := pty.FromSlave(slaveFile)
+
+	go func() {
+		sess, err := session.StartSessionWithBridge(context.Background(), h, st.Title, app.settings.DefaultLogsDir, bridge, nil)
+		glib.IdleAdd(func() {
+			if err != nil {
+				return
+			}
+			sess.ID = st.ID
+			sess.Notes = st.Notes
+			app.manager.Register(sess)
+
+			term.OnResize = func(rows, cols int) {
+				sess.Resize(rows, cols)
+			}
+			if st.ScrollbackDump != "" {
+				header := session.FormatRestoredHistoryHeader(st.SavedAt)
+				term.FeedText(st.ScrollbackDump + header)
+			}
+
+			isVertical := st.SplitDirection == "vertical" || st.SplitDirection == "left-right"
+			_ = app.TabView.SplitActiveTab(tabItem, sess, term, isVertical)
+		})
+	}()
+}
+
+func (app *AppWindow) SaveAllSessionState() {
+	var states []storage.SavedSessionState
+	for tabIdx, item := range app.TabView.items {
+		for paneIdx, pane := range item.Panes {
+			s := pane.Session
+			if s == nil {
+				continue
+			}
+			hostID := ""
+			protocol := storage.ProtoLocal
+			if s.Host != nil {
+				hostID = s.Host.ID
+				protocol = s.Host.Protocol
+			}
+			scrollback := s.GetScrollbackText()
+			if len(scrollback) > 50*1024 {
+				scrollback = scrollback[len(scrollback)-50*1024:]
+			}
+			workingDir := "/"
+			if s.SFTPClient != nil {
+				workingDir = s.SFTPClient.CurrentDir()
+			}
+			parentID := ""
+			splitDir := "none"
+			if paneIdx > 0 && len(item.Panes) > 0 && item.Panes[0].Session != nil {
+				parentID = item.Panes[0].Session.ID
+				splitDir = "vertical"
+			}
+
+			st := storage.SavedSessionState{
+				ID:             s.ID,
+				HostID:         hostID,
+				Title:          s.Title,
+				Protocol:       protocol,
+				TabIndex:       tabIdx,
+				SplitParentID:  parentID,
+				SplitDirection: splitDir,
+				WorkingDir:     workingDir,
+				ScrollbackDump: scrollback,
+				Notes:          item.Session.Notes,
+				SavedAt:        time.Now(),
+			}
+			states = append(states, st)
+		}
+	}
+	_ = app.store.SaveActiveSessions(states)
 }
 
 // Quit saves session states and exits cleanly
