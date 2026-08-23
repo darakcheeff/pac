@@ -21,6 +21,18 @@ const splitVerticalSVG = `<?xml version="1.0" encoding="UTF-8"?>
   <rect x="12" y="4.5" width="2" height="3" rx="0.5" fill="#3465a4"/>
 </svg>`
 
+// Download icon: Tray at bottom with arrow pointing DOWN into the tray
+const downloadSVG = `<?xml version="1.0" encoding="UTF-8"?>
+<svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
+  <path d="m 8 1 c -0.55 0 -1 0.45 -1 1 v 7.586 l -2.293 -2.293 c -0.39 -0.39 -1.023 -0.39 -1.414 0 s -0.39 1.023 0 1.414 l 4 4 c 0.39 0.39 1.023 0.39 1.414 0 l 4 -4 c 0.39 -0.39 0.39 -1.023 0 -1.414 s -1.023 -0.39 -1.414 0 l -2.293 2.293 v -7.586 c 0 -0.55 -0.45 -1 -1 -1 z m -7 13 v 2 h 14 v -2 z" fill="#2e3436"/>
+</svg>`
+
+// Upload icon: Tray at bottom with arrow pointing UP out of the tray (reverse of download)
+const uploadSVG = `<?xml version="1.0" encoding="UTF-8"?>
+<svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
+  <path d="m 8 13 c 0.55 0 1 -0.45 1 -1 v -7.586 l 2.293 2.293 c 0.39 0.39 1.023 0.39 1.414 0 s 0.39 -1.023 0 -1.414 l -4 -4 c -0.39 -0.39 -1.023 -0.39 -1.414 0 l -4 4 c -0.39 0.39 -0.39 1.023 0 1.414 s 1.023 0.39 1.414 0 l 2.293 -2.293 v 7.586 c 0 0.55 0.45 1 1 1 z m -7 1 v 2 h 14 v -2 z" fill="#2e3436"/>
+</svg>`
+
 // GetSplitHorizontalImage returns a crisp GTK Image representing top/bottom screen split
 func GetSplitHorizontalImage() *gtk.Image {
 	return imageFromSVG(splitHorizontalSVG, "view-split-top-bottom-symbolic")
@@ -29,6 +41,16 @@ func GetSplitHorizontalImage() *gtk.Image {
 // GetSplitVerticalImage returns a crisp GTK Image representing left/right screen split
 func GetSplitVerticalImage() *gtk.Image {
 	return imageFromSVG(splitVerticalSVG, "view-split-left-right-symbolic")
+}
+
+// GetDownloadImage returns the download icon (arrow pointing into tray)
+func GetDownloadImage() *gtk.Image {
+	return imageFromSVG(downloadSVG, "document-save-symbolic")
+}
+
+// GetUploadImage returns the upload icon (arrow pointing up from tray)
+func GetUploadImage() *gtk.Image {
+	return imageFromSVG(uploadSVG, "document-send-symbolic")
 }
 
 func imageFromSVG(svgData string, fallbackIcon string) *gtk.Image {
@@ -45,6 +67,6 @@ func imageFromSVG(svgData string, fallbackIcon string) *gtk.Image {
 		}
 	}
 	// Fallback to stock icon if SVG loader fails
-	img, _ := gtk.ImageNewFromIconName(fallbackIcon, gtk.ICON_SIZE_LARGE_TOOLBAR)
+	img, _ := gtk.ImageNewFromIconName(fallbackIcon, gtk.ICON_SIZE_BUTTON)
 	return img
 }

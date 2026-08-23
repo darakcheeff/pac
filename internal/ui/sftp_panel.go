@@ -62,11 +62,13 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	mkdirBtn.SetTooltipText("Создать новую папку на сервере (F7)")
 	topBox.PackStart(mkdirBtn, false, false, 0)
 
-	uploadBtn, _ := gtk.ButtonNewFromIconName("document-send-symbolic", gtk.ICON_SIZE_BUTTON)
+	uploadBtn, _ := gtk.ButtonNew()
+	uploadBtn.SetImage(GetUploadImage())
 	uploadBtn.SetTooltipText("Выгрузить файлы с локального компьютера на сервер (Upload)")
 	topBox.PackStart(uploadBtn, false, false, 0)
 
-	downloadBtn, _ := gtk.ButtonNewFromIconName("document-save-symbolic", gtk.ICON_SIZE_BUTTON)
+	downloadBtn, _ := gtk.ButtonNew()
+	downloadBtn.SetImage(GetDownloadImage())
 	downloadBtn.SetTooltipText("Скачать выбранный файл на локальный компьютер (Download)")
 	topBox.PackStart(downloadBtn, false, false, 0)
 
@@ -102,6 +104,13 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	colSize.SetResizable(true)
 	colSize.SetMinWidth(70)
 	treeView.AppendColumn(colSize)
+
+	// Column: ModTime (Дата изменения)
+	rTime, _ := gtk.CellRendererTextNew()
+	colTime, _ := gtk.TreeViewColumnNewWithAttribute("Дата изменения", rTime, "text", SFTPColTime)
+	colTime.SetResizable(true)
+	colTime.SetMinWidth(120)
+	treeView.AppendColumn(colTime)
 
 	// Scrolled container
 	scrolled, _ := gtk.ScrolledWindowNew(nil, nil)

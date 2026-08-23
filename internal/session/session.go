@@ -153,7 +153,7 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		sess.TelnetSession = tSess
 
 	case storage.ProtoSerial:
-		sSess, err := serial.ConnectSerial(ctx, host, bridge)
+		sSess, err := serial.ConnectSerial(ctx, host, bridge, sess.Splitter)
 		if err != nil {
 			bridge.Close()
 			return nil, err
