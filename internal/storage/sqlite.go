@@ -20,6 +20,14 @@ type Store struct {
 
 // NewStore initializes SQLite database with WAL mode
 func NewStore(dbPath string) (*Store, error) {
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		dbPath = filepath.Join(home, ".config", "pac", "pac.db")
+	}
+	log.Printf("[DB] Opening SQLite database at: %s", dbPath)
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
