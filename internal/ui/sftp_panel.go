@@ -51,27 +51,28 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	topBox.SetMarginTop(4)
 
 	upBtn, _ := gtk.ButtonNewFromIconName("go-up-symbolic", gtk.ICON_SIZE_BUTTON)
-	upBtn.SetTooltipText("На уровень выше")
+	upBtn.SetTooltipText("Перейти в родительский каталог (Вверх)")
 	topBox.PackStart(upBtn, false, false, 0)
 
 	refreshBtn, _ := gtk.ButtonNewFromIconName("view-refresh-symbolic", gtk.ICON_SIZE_BUTTON)
-	refreshBtn.SetTooltipText("Обновить каталог (F5)")
+	refreshBtn.SetTooltipText("Обновить список файлов и папок (F5)")
 	topBox.PackStart(refreshBtn, false, false, 0)
 
 	mkdirBtn, _ := gtk.ButtonNewFromIconName("folder-new-symbolic", gtk.ICON_SIZE_BUTTON)
-	mkdirBtn.SetTooltipText("Создать новую папку (F7)")
+	mkdirBtn.SetTooltipText("Создать новую папку на сервере (F7)")
 	topBox.PackStart(mkdirBtn, false, false, 0)
 
-	uploadBtn, _ := gtk.ButtonNewFromIconName("go-up-symbolic", gtk.ICON_SIZE_BUTTON)
-	uploadBtn.SetTooltipText("Выгрузить файл на сервер (Upload)")
+	uploadBtn, _ := gtk.ButtonNewFromIconName("document-send-symbolic", gtk.ICON_SIZE_BUTTON)
+	uploadBtn.SetTooltipText("Выгрузить файлы с локального компьютера на сервер (Upload)")
 	topBox.PackStart(uploadBtn, false, false, 0)
 
-	downloadBtn, _ := gtk.ButtonNewFromIconName("go-down-symbolic", gtk.ICON_SIZE_BUTTON)
-	downloadBtn.SetTooltipText("Скачать выбранный файл (Download)")
+	downloadBtn, _ := gtk.ButtonNewFromIconName("document-save-symbolic", gtk.ICON_SIZE_BUTTON)
+	downloadBtn.SetTooltipText("Скачать выбранный файл на локальный компьютер (Download)")
 	topBox.PackStart(downloadBtn, false, false, 0)
 
 	pathEntry, _ := gtk.EntryNew()
 	pathEntry.SetPlaceholderText("/remote/path")
+	pathEntry.SetTooltipText("Текущий путь на удаленном сервере (введите путь и нажмите Enter)")
 	pathEntry.SetHExpand(true)
 	topBox.PackStart(pathEntry, true, true, 0)
 

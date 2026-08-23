@@ -307,9 +307,11 @@ func (app *AppWindow) setupMenuAndToolbar() {
 
 	app.MenuBar.Append(mSessions)
 
-	// --- ToolBar Buttons ---
+	// --- ToolBar Buttons with standard icons & rich tooltips ---
+	// 1. New Connection
 	btnNew, _ := gtk.ToolButtonNew(nil, "Новое подключение")
-	btnNew.SetIconName("document-new-symbolic")
+	btnNew.SetIconName("tab-new-symbolic")
+	btnNew.SetTooltipText("Создать новое подключение к серверу (SSH, Telnet, Serial, Local)")
 	btnNew.Connect("clicked", func() {
 		dialogs.ShowHostEditorDialog(app.Window, app.store, nil, "root", func(h *storage.Host) {
 			app.HostTree.Reload()
@@ -317,8 +319,10 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	app.ToolBar.Insert(btnNew, -1)
 
+	// 2. Quick Connect
 	btnQuick, _ := gtk.ToolButtonNew(nil, "Быстрое подключение")
 	btnQuick.SetIconName("network-wired-symbolic")
+	btnQuick.SetTooltipText("Быстрое подключение к хосту без предварительного сохранения")
 	btnQuick.Connect("clicked", func() {
 		dialogs.ShowQuickConnectDialog(app.Window, func(h *storage.Host) {
 			app.ConnectToHost(h)
@@ -329,8 +333,10 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	sepTool1, _ := gtk.SeparatorToolItemNew()
 	app.ToolBar.Insert(sepTool1, -1)
 
+	// 3. Split Horizontal
 	btnSplitH, _ := gtk.ToolButtonNew(nil, "Сплит H")
 	btnSplitH.SetIconName("view-paged-symbolic")
+	btnSplitH.SetTooltipText("Разделить активную вкладку по горизонтали (верхний и нижний терминалы)")
 	btnSplitH.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -339,8 +345,10 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	app.ToolBar.Insert(btnSplitH, -1)
 
+	// 4. Split Vertical
 	btnSplitV, _ := gtk.ToolButtonNew(nil, "Сплит V")
 	btnSplitV.SetIconName("view-dual-symbolic")
+	btnSplitV.SetTooltipText("Разделить активную вкладку по вертикали (левый и правый терминалы)")
 	btnSplitV.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -349,8 +357,13 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	app.ToolBar.Insert(btnSplitV, -1)
 
+	sepTool2, _ := gtk.SeparatorToolItemNew()
+	app.ToolBar.Insert(sepTool2, -1)
+
+	// 5. Broadcast / Cluster Input
 	btnBroadcast, _ := gtk.ToolButtonNew(nil, "Кластерный ввод")
 	btnBroadcast.SetIconName("input-keyboard-symbolic")
+	btnBroadcast.SetTooltipText("Кластерный ввод: одновременная трансляция команд во все открытые вкладки")
 	btnBroadcast.Connect("clicked", func() {
 		if app.BroadcastBar.Box.IsVisible() {
 			app.BroadcastBar.Box.Hide()
@@ -361,8 +374,10 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	app.ToolBar.Insert(btnBroadcast, -1)
 
+	// 6. Global Search
 	btnSearch, _ := gtk.ToolButtonNew(nil, "Поиск по всем сессиям")
 	btnSearch.SetIconName("edit-find-symbolic")
+	btnSearch.SetTooltipText("Глобальный поиск текста по всем открытым сессиям и вкладкам (Ctrl+Shift+Alt+F)")
 	btnSearch.Connect("clicked", func() {
 		ShowGlobalSearchDialog(app.Window, app.manager, nil)
 	})
