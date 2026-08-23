@@ -283,14 +283,14 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 	}
 
 	// Auto-center divider at 50%
-	paned.Connect("size-allocate", func(_ *gtk.Paned, alloc *gdk.Rectangle) {
+	paned.Connect("size-allocate", func() {
 		if vertical {
-			w := alloc.GetWidth()
+			w := paned.GetAllocatedWidth()
 			if w > 40 && paned.GetPosition() <= 10 {
 				paned.SetPosition(w / 2)
 			}
 		} else {
-			h := alloc.GetHeight()
+			h := paned.GetAllocatedHeight()
 			if h > 40 && paned.GetPosition() <= 10 {
 				paned.SetPosition(h / 2)
 			}
