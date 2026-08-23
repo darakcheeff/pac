@@ -30,6 +30,18 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	entryPort, _ := gtk.EntryNew()
 	entryPort.SetText("22")
 
+	// Host / Device entry
+	entryHost, _ := gtk.EntryNew()
+	entryHost.SetPlaceholderText("192.168.1.1 или server.com")
+
+	// User entry
+	entryUser, _ := gtk.EntryNew()
+	entryUser.SetPlaceholderText("root / admin")
+
+	// Password entry
+	entryPass, _ := gtk.EntryNew()
+	entryPass.SetVisibility(false)
+
 	// Protocol
 	lblProto, _ := gtk.LabelNew("Протокол:")
 	lblProto.SetHAlign(gtk.ALIGN_END)
@@ -39,44 +51,82 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	comboProto.Append("serial", "Serial / COM-порт")
 	comboProto.Append("local", "Локальный терминал")
 	comboProto.SetActiveID("ssh")
-	comboProto.Connect("changed", func() {
+
+	lblHost, _ := gtk.LabelNew("Хост / IP:")
+	lblHost.SetHAlign(gtk.ALIGN_END)
+
+	lblPort, _ := gtk.LabelNew("Порт:")
+	lblPort.SetHAlign(gtk.ALIGN_END)
+
+	lblUser, _ := gtk.LabelNew("Пользователь:")
+	lblUser.SetHAlign(gtk.ALIGN_END)
+
+	lblPass, _ := gtk.LabelNew("Пароль:")
+	lblPass.SetHAlign(gtk.ALIGN_END)
+
+	updateProto := func() {
 		p := comboProto.GetActiveID()
 		if p == "telnet" {
+			lblHost.SetText("Хост / IP:")
+			entryHost.SetPlaceholderText("192.168.1.1")
+			lblPort.SetVisible(true)
+			entryPort.SetVisible(true)
 			entryPort.SetText("23")
+			lblUser.SetVisible(true)
+			entryUser.SetVisible(true)
+			lblPass.SetVisible(true)
+			entryPass.SetVisible(true)
 		} else if p == "ssh" {
+			lblHost.SetText("Хост / IP:")
+			entryHost.SetPlaceholderText("192.168.1.1 или server.com")
+			lblPort.SetVisible(true)
+			entryPort.SetVisible(true)
 			entryPort.SetText("22")
+			lblUser.SetVisible(true)
+			entryUser.SetVisible(true)
+			lblPass.SetVisible(true)
+			entryPass.SetVisible(true)
+		} else if p == "serial" {
+			lblHost.SetText("COM-устройство:")
+			entryHost.SetPlaceholderText("/dev/ttyUSB0 или /tmp/ttySerial0")
+			if entryHost.GetTextLength() == 0 {
+				entryHost.SetText("/dev/ttyUSB0")
+			}
+			lblPort.SetVisible(false)
+			entryPort.SetVisible(false)
+			lblUser.SetVisible(false)
+			entryUser.SetVisible(false)
+			lblPass.SetVisible(false)
+			entryPass.SetVisible(false)
+		} else if p == "local" {
+			lblHost.SetText("Команда/Shell:")
+			entryHost.SetPlaceholderText("/bin/bash")
+			entryHost.SetText("/bin/bash")
+			lblPort.SetVisible(false)
+			entryPort.SetVisible(false)
+			lblUser.SetVisible(false)
+			entryUser.SetVisible(false)
+			lblPass.SetVisible(false)
+			entryPass.SetVisible(false)
 		}
+	}
+
+	comboProto.Connect("changed", func() {
+		updateProto()
 	})
+
 	grid.Attach(lblProto, 0, 0, 1, 1)
 	grid.Attach(comboProto, 1, 0, 1, 1)
 
-	// Host
-	lblHost, _ := gtk.LabelNew("Хост / IP:")
-	lblHost.SetHAlign(gtk.ALIGN_END)
-	entryHost, _ := gtk.EntryNew()
-	entryHost.SetPlaceholderText("192.168.1.1 или server.com")
 	grid.Attach(lblHost, 0, 1, 1, 1)
 	grid.Attach(entryHost, 1, 1, 1, 1)
 
-	// Port
-	lblPort, _ := gtk.LabelNew("Порт:")
-	lblPort.SetHAlign(gtk.ALIGN_END)
 	grid.Attach(lblPort, 0, 2, 1, 1)
 	grid.Attach(entryPort, 1, 2, 1, 1)
 
-	// User
-	lblUser, _ := gtk.LabelNew("Пользователь:")
-	lblUser.SetHAlign(gtk.ALIGN_END)
-	entryUser, _ := gtk.EntryNew()
-	entryUser.SetPlaceholderText("root / admin")
 	grid.Attach(lblUser, 0, 3, 1, 1)
 	grid.Attach(entryUser, 1, 3, 1, 1)
 
-	// Password
-	lblPass, _ := gtk.LabelNew("Пароль:")
-	lblPass.SetHAlign(gtk.ALIGN_END)
-	entryPass, _ := gtk.EntryNew()
-	entryPass.SetVisibility(false)
 	grid.Attach(lblPass, 0, 4, 1, 1)
 	grid.Attach(entryPass, 1, 4, 1, 1)
 
@@ -88,6 +138,7 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	dlg.SetDefault(btnConnect)
 
 	dlg.ShowAll()
+	updateProto()
 
 	if dlg.Run() == gtk.RESPONSE_OK {
 		hostStr, _ := entryHost.GetText()
@@ -100,18 +151,30 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 		}
 
 		proto := storage.Protocol(comboProto.GetActiveID())
+		name := fmt.Sprintf("%s@%s", userStr, hostStr)
+		if proto == storage.ProtoSerial {
+			name = fmt.Sprintf("Serial (%s)", hostStr)
+		} else if proto == storage.ProtoLocal {
+			name = "Локальный терминал"
+		}
+
 		host := &storage.Host{
-			ID:          fmt.Sprintf("quick-%d", time.Now().Unix()),
-			Name:        fmt.Sprintf("%s@%s", userStr, hostStr),
-			Protocol:    proto,
-			Host:        hostStr,
-			Port:        portInt,
-			Username:    userStr,
-			AuthMethod:  storage.AuthPassword,
-			Password:    passStr,
-			AutoSFTP:    true,
-			TerminalType: "xterm-256color",
-			CreatedAt:   time.Now(),
+			ID:             fmt.Sprintf("quick-%d", time.Now().Unix()),
+			Name:           name,
+			Protocol:       proto,
+			Host:           hostStr,
+			Port:           portInt,
+			Username:       userStr,
+			AuthMethod:     storage.AuthPassword,
+			Password:       passStr,
+			SerialPort:     hostStr,
+			SerialBaudRate: 115200,
+			SerialDataBits: 8,
+			SerialStopBits: 1,
+			SerialParity:   "none",
+			AutoSFTP:       true,
+			TerminalType:   "xterm-256color",
+			CreatedAt:      time.Now(),
 		}
 		if onConnect != nil {
 			onConnect(host)
