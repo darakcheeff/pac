@@ -455,7 +455,13 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 		return
 	}
 
-	targetHost := sess.Host
+	var targetHost *storage.Host
+	if tab.Session != nil && tab.Session.Host != nil {
+		targetHost = tab.Session.Host
+	} else if sess != nil && sess.Host != nil {
+		targetHost = sess.Host
+	}
+
 	if targetHost == nil {
 		targetHost = &storage.Host{
 			ID:           "local",
