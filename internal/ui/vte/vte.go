@@ -84,7 +84,13 @@ static void configure_vte_terminal(GtkWidget* w) {
     g_signal_connect(w, "button-press-event", G_CALLBACK(on_vte_button_press), NULL);
 }
 
+#include <fcntl.h>
+
 static gboolean set_terminal_pty_fd(GtkWidget* term, int fd, GError** error) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
     VtePty* pty = vte_pty_new_foreign_sync(fd, NULL, error);
     if (!pty) {
         return FALSE;

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/darakcheeff/pac/internal/storage"
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	// Pin main goroutine to OS thread for GTK/X11 message pump stability
+	runtime.LockOSThread()
+
 	dbPath := flag.String("db", "", "Path to SQLite database file")
 	flag.Parse()
 

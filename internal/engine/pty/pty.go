@@ -34,6 +34,9 @@ func Open() (*PTYBridge, error) {
 		return nil, fmt.Errorf("failed to open pty: %w", err)
 	}
 
+	// Crucial: Set Master FD to non-blocking so GTK/VTE never block the main UI loop
+	_ = syscall.SetNonblock(int(master.Fd()), true)
+
 	return &PTYBridge{
 		Master: master,
 		Slave:  slave,
