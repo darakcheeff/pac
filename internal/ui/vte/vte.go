@@ -14,6 +14,26 @@ static VteTerminal* TO_VTE_TERMINAL(GtkWidget* w) {
     return VTE_TERMINAL(w);
 }
 
+static void paste_clean_text(VteTerminal* term, GdkAtom selection) {
+    GtkClipboard* clipboard = gtk_clipboard_get(selection);
+    if (!clipboard) return;
+
+    gchar* text = gtk_clipboard_wait_for_text(clipboard);
+    if (text) {
+        vte_terminal_feed_child(term, text, strlen(text));
+        g_free(text);
+    }
+}
+
+static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
+    // Intercept middle-click paste to prevent bracketed paste markers (^[[200~ / ^[[201~)
+    if (event->button == GDK_BUTTON_MIDDLE) {
+        paste_clean_text(VTE_TERMINAL(widget), GDK_SELECTION_PRIMARY);
+        return TRUE; // Consume event completely
+    }
+    return FALSE;
+}
+
 static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
     // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
     if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
@@ -53,6 +73,7 @@ static void configure_vte_terminal(GtkWidget* w) {
     vte_terminal_set_audible_bell(term, FALSE);
 
     g_signal_connect(w, "key-press-event", G_CALLBACK(on_vte_key_press), NULL);
+    g_signal_connect(w, "button-press-event", G_CALLBACK(on_vte_button_press), NULL);
 }
 
 static gboolean set_terminal_pty_fd(GtkWidget* term, int fd, GError** error) {
@@ -218,9 +239,14 @@ func (t *Terminal) CopyClipboard() {
 	C.vte_terminal_copy_clipboard_format(t.vteTerm, C.VTE_FORMAT_TEXT)
 }
 
-// PasteClipboard pastes clipboard text into terminal
+// PasteClipboard pastes clean clipboard text into terminal without bracketed paste garbage
 func (t *Terminal) PasteClipboard() {
-	C.vte_terminal_paste_clipboard(t.vteTerm)
+	C.paste_clean_text(t.vteTerm, C.GDK_SELECTION_CLIPBOARD)
+}
+
+// PastePrimary pastes clean primary selection (middle click) into terminal
+func (t *Terminal) PastePrimary() {
+	C.paste_clean_text(t.vteTerm, C.GDK_SELECTION_PRIMARY)
 }
 
 // SelectAll selects entire terminal content
