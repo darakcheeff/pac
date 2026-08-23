@@ -115,7 +115,7 @@ static int create_vte_native_pty(GtkWidget* term, char* slave_path, size_t slave
 
     strncpy(slave_path, sname, slave_path_len - 1);
     slave_path[slave_path_len - 1] = '\0';
-    g_object_unref(pty); // Terminal holds its own reference to pty
+    g_object_unref(pty);
     return master_fd;
 }
 
@@ -153,51 +153,81 @@ static gboolean set_terminal_search_pattern(GtkWidget* term, const char* pattern
     return TRUE;
 }
 
-static void search_terminal_previous(GtkWidget* term) {
-    vte_terminal_search_find_previous(VTE_TERMINAL(term));
-}
-
-static void search_terminal_next(GtkWidget* term) {
-    vte_terminal_search_find_next(VTE_TERMINAL(term));
+static void set_terminal_scheme_colors(GtkWidget* term, const char* scheme_name) {
+    GdkRGBA fg, bg;
+    if (g_strcmp0(scheme_name, "solarized-dark") == 0) {
+        gdk_rgba_parse(&fg, "#839496");
+        gdk_rgba_parse(&bg, "#002b36");
+    } else if (g_strcmp0(scheme_name, "dracula") == 0) {
+        gdk_rgba_parse(&fg, "#f8f8f2");
+        gdk_rgba_parse(&bg, "#282a36");
+    } else if (g_strcmp0(scheme_name, "monokai") == 0) {
+        gdk_rgba_parse(&fg, "#f8f8f2");
+        gdk_rgba_parse(&bg, "#272822");
+    } else if (g_strcmp0(scheme_name, "white-on-black") == 0) {
+        gdk_rgba_parse(&fg, "#ffffff");
+        gdk_rgba_parse(&bg, "#000000");
+    } else if (g_strcmp0(scheme_name, "black-on-white") == 0) {
+        gdk_rgba_parse(&fg, "#000000");
+        gdk_rgba_parse(&bg, "#ffffff");
+    } else { // default mate-terminal dark
+        gdk_rgba_parse(&fg, "#d0d0d0");
+        gdk_rgba_parse(&bg, "#1a1a1a");
+    }
+    vte_terminal_set_colors(VTE_TERMINAL(term), &fg, &bg, NULL, 0);
 }
 */
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"unsafe"
 
 	"github.com/darakcheeff/pac/internal/engine/pty"
-	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
-	"github.com/gotk3/gotk3/pango"
 	"golang.org/x/sys/unix"
 )
 
-// Terminal wraps libvte GtkWidget
-type Terminal struct {
-	Widget   *gtk.Widget
-	OnResize func(rows, cols int)
+func init() {
+	// Register VteTerminal in gotk3 WrapMap to prevent reflection conversion panics
+	gtk.WrapMap["VteTerminal"] = func(obj *glib.Object) *gtk.Widget {
+		return &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: obj}}
+	}
 }
 
-// NewTerminal creates an instance of VteTerminal
+// Terminal wraps VteTerminal C widget
+type Terminal struct {
+	*gtk.Widget
+	vteWidget *C.GtkWidget
+	vteTerm   *C.VteTerminal
+	OnResize  func(rows, cols int)
+}
+
+// NewTerminal creates a new VTE Terminal widget matching mate-terminal specifications
 func NewTerminal() (*Terminal, error) {
-	obj, err := glib.ObjectNew(glib.TypeFromName("VteTerminal"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create VteTerminal: %w", err)
+	cWidget := C.vte_terminal_new()
+	if cWidget == nil {
+		return nil, fmt.Errorf("failed to create vte_terminal")
 	}
 
-	gWidget := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: obj}}
-	C.configure_vte_terminal(C.TO_VTE_TERMINAL(unsafe.Pointer(gWidget.GWidget)))
+	cTerm := C.TO_VTE_TERMINAL(cWidget)
+
+	// Configure terminal defaults exactly like mate-terminal
+	C.configure_vte_terminal(cWidget)
+
+	// Wrap C GtkWidget into gotk3 *gtk.Widget properly via glib.Take
+	glibObj := glib.Take(unsafe.Pointer(cWidget))
+	gWidget := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: glibObj}}
 
 	term := &Terminal{
-		Widget: gWidget,
+		Widget:    gWidget,
+		vteWidget: cWidget,
+		vteTerm:   cTerm,
 	}
 
-	// Connect size-allocate to notify Go of window resize
+	// Connect size-allocate to notify Go of window resize and update SIGWINCH / PTY size
 	gWidget.Connect("size-allocate", func() {
 		rows := term.GetRowCount()
 		cols := term.GetColumnCount()
@@ -206,38 +236,39 @@ func NewTerminal() (*Terminal, error) {
 		}
 	})
 
+	term.ApplyColorScheme("mate")
 	return term, nil
 }
 
 // SetupNativePTY initializes native VTE PTY and returns the opened slave *os.File in RAW mode
 func (t *Terminal) SetupNativePTY() (*os.File, error) {
-	var cErr *C.GError
+	var err *C.GError
 	var slavePathBuf [512]C.char
 
 	masterFd := C.create_vte_native_pty(
-		C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)),
+		t.vteWidget,
 		&slavePathBuf[0],
 		C.size_t(len(slavePathBuf)),
-		&cErr,
+		&err,
 	)
 	if masterFd < 0 {
 		errMsg := "unknown error"
-		if cErr != nil {
-			errMsg = C.GoString(cErr.message)
-			C.g_error_free(cErr)
+		if err != nil {
+			errMsg = C.GoString(err.message)
+			C.g_error_free(err)
 		}
 		return nil, fmt.Errorf("failed to create native VtePty: %s", errMsg)
 	}
 
 	slavePath := C.GoString(&slavePathBuf[0])
-	slaveFile, err := os.OpenFile(slavePath, os.O_RDWR, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open PTY slave %s: %w", slavePath, err)
+	slaveFile, oErr := os.OpenFile(slavePath, os.O_RDWR, 0)
+	if oErr != nil {
+		return nil, fmt.Errorf("failed to open PTY slave %s: %w", slavePath, oErr)
 	}
 
 	// Put slave into raw mode
-	termios, err := unix.IoctlGetTermios(int(slaveFile.Fd()), unix.TCGETS)
-	if err == nil {
+	termios, tErr := unix.IoctlGetTermios(int(slaveFile.Fd()), unix.TCGETS)
+	if tErr == nil {
 		termios.Iflag &^= (unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON)
 		termios.Oflag &^= unix.OPOST
 		termios.Lflag &^= (unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN)
@@ -251,13 +282,33 @@ func (t *Terminal) SetupNativePTY() (*os.File, error) {
 	return slaveFile, nil
 }
 
-// SetPTYFD connects a master PTY file descriptor to VTE
+// GetRowCount returns current visible row count of terminal
+func (t *Terminal) GetRowCount() int {
+	return int(C.get_terminal_row_count(t.vteWidget))
+}
+
+// GetColumnCount returns current visible column count of terminal
+func (t *Terminal) GetColumnCount() int {
+	return int(C.get_terminal_column_count(t.vteWidget))
+}
+
+// GrabFocus gives keyboard focus directly to the terminal
+func (t *Terminal) GrabFocus() {
+	if t.Widget != nil {
+		t.Widget.GrabFocus()
+	}
+}
+
+// SetPTYFD attaches an open PTY file descriptor to the VTE terminal
 func (t *Terminal) SetPTYFD(fd int) error {
-	var cErr *C.GError
-	success := C.set_terminal_pty_fd(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)), C.int(fd), &cErr)
-	if !bool(success) {
-		defer C.g_error_free(cErr)
-		return errors.New(C.GoString(cErr.message))
+	var err *C.GError
+	ok := C.set_terminal_pty_fd(t.vteWidget, C.int(fd), &err)
+	if ok == C.FALSE {
+		if err != nil {
+			defer C.g_error_free(err)
+			return fmt.Errorf("vte set pty error: %s", C.GoString(err.message))
+		}
+		return fmt.Errorf("failed to set pty fd on vte terminal")
 	}
 	return nil
 }
@@ -265,116 +316,100 @@ func (t *Terminal) SetPTYFD(fd int) error {
 // AttachPTY connects a master PTY file descriptor to VTE
 func (t *Terminal) AttachPTY(bridge *pty.PTYBridge) error {
 	if bridge == nil || bridge.Master == nil {
-		return errors.New("invalid pty bridge")
+		return fmt.Errorf("invalid pty bridge")
 	}
 	return t.SetPTYFD(int(bridge.Master.Fd()))
 }
 
-// SetFont changes terminal font face and size
-func (t *Terminal) SetFont(fontDescStr string) {
-	if fontDescStr == "" {
-		fontDescStr = "Monospace 11"
+// FeedText writes string directly to VTE display buffer
+func (t *Terminal) FeedText(text string) {
+	cStr := C.CString(text)
+	defer C.free(unsafe.Pointer(cStr))
+	C.vte_terminal_feed(t.vteTerm, cStr, C.gssize(len(text)))
+}
+
+// FeedChild writes raw string to the child PTY process (stdin)
+func (t *Terminal) FeedChild(text string) {
+	cStr := C.CString(text)
+	defer C.free(unsafe.Pointer(cStr))
+	C.vte_terminal_feed_child(t.vteTerm, cStr, C.gssize(len(text)))
+}
+
+// SetScrollbackLines updates maximum scrollback buffer depth
+func (t *Terminal) SetScrollbackLines(lines int) {
+	C.vte_terminal_set_scrollback_lines(t.vteTerm, C.glong(lines))
+}
+
+// SetFont sets custom font family and size
+func (t *Terminal) SetFont(fontDesc string) {
+	if fontDesc == "" {
+		fontDesc = "Monospace 11"
 	}
-	pangoDesc := pango.FontDescriptionFromString(fontDescStr)
+	cFont := C.CString(fontDesc)
+	defer C.free(unsafe.Pointer(cFont))
+
+	pangoDesc := C.pango_font_description_from_string(cFont)
 	if pangoDesc != nil {
-		cDesc := (*C.PangoFontDescription)(unsafe.Pointer(pangoDesc.Native()))
-		C.vte_terminal_set_font(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)), cDesc)
+		C.vte_terminal_set_font(t.vteTerm, pangoDesc)
+		C.pango_font_description_free(pangoDesc)
 	}
 }
 
-// ApplyColorScheme applies background, foreground, and 16 palette colors
-func (t *Terminal) ApplyColorScheme(schemeName string) {
-	scheme := GetColorScheme(schemeName)
+// CopyClipboard copies selection to clipboard
+func (t *Terminal) CopyClipboard() {
+	C.vte_terminal_copy_clipboard_format(t.vteTerm, C.VTE_FORMAT_TEXT)
+}
 
-	bg := parseGdkRGBA(scheme.Background)
-	fg := parseGdkRGBA(scheme.Foreground)
+// PasteClipboard pastes clean clipboard text into terminal without bracketed paste garbage
+func (t *Terminal) PasteClipboard() {
+	C.paste_clean_text(t.vteTerm, C.GDK_SELECTION_CLIPBOARD)
+}
 
-	var palette [16]C.GdkRGBA
-	for i, cHex := range scheme.Palette {
-		if i >= 16 {
-			break
-		}
-		cRGBA := parseGdkRGBA(cHex)
-		palette[i] = *(*C.GdkRGBA)(unsafe.Pointer(cRGBA.Native()))
+// PastePrimary pastes clean primary selection (middle click) into terminal
+func (t *Terminal) PastePrimary() {
+	C.paste_clean_text(t.vteTerm, C.GDK_SELECTION_PRIMARY)
+}
+
+// SelectAll selects entire terminal content
+func (t *Terminal) SelectAll() {
+	C.vte_terminal_select_all(t.vteTerm)
+}
+
+// Reset clears terminal state
+func (t *Terminal) Reset(clearHistory bool) {
+	var clear C.gboolean = C.FALSE
+	if clearHistory {
+		clear = C.TRUE
 	}
-
-	cBg := (*C.GdkRGBA)(unsafe.Pointer(bg.Native()))
-	cFg := (*C.GdkRGBA)(unsafe.Pointer(fg.Native()))
-
-	C.vte_terminal_set_colors(
-		C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)),
-		cFg,
-		cBg,
-		&palette[0],
-		16,
-	)
+	C.vte_terminal_reset(t.vteTerm, clear, clear)
 }
 
-func parseGdkRGBA(hex string) *gdk.RGBA {
-	rgba := gdk.NewRGBA()
-	if ok := rgba.Parse(hex); !ok {
-		_ = rgba.Parse("#000000")
-	}
-	return rgba
-}
-
-// GetRowCount returns current visible terminal rows
-func (t *Terminal) GetRowCount() int {
-	return int(C.get_terminal_row_count(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget))))
-}
-
-// GetColumnCount returns current visible terminal columns
-func (t *Terminal) GetColumnCount() int {
-	return int(C.get_terminal_column_count(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget))))
-}
-
-// SearchSetPattern configures text search query
-func (t *Terminal) SearchSetPattern(pattern string, caseSensitive bool) error {
+// SearchSetPattern configures search regex
+func (t *Terminal) SearchSetPattern(pattern string, caseSensitive bool) bool {
 	cPattern := C.CString(pattern)
 	defer C.free(unsafe.Pointer(cPattern))
 
-	cCase := C.gboolean(0)
+	var cs C.gboolean = C.FALSE
 	if caseSensitive {
-		cCase = C.gboolean(1)
+		cs = C.TRUE
 	}
 
-	success := C.set_terminal_search_pattern(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)), cPattern, cCase)
-	if !bool(success) {
-		return errors.New("invalid search regex pattern")
-	}
-	return nil
+	return C.set_terminal_search_pattern(t.vteWidget, cPattern, cs) == C.TRUE
 }
 
-// SearchPrevious navigates to earlier match
-func (t *Terminal) SearchPrevious() {
-	C.search_terminal_previous(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)))
+// SearchFindNext finds next match forward
+func (t *Terminal) SearchFindNext() bool {
+	return C.vte_terminal_search_find_next(t.vteTerm) == C.TRUE
 }
 
-// SearchNext navigates to next match
-func (t *Terminal) SearchNext() {
-	C.search_terminal_next(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)))
+// SearchFindPrevious finds previous match backward
+func (t *Terminal) SearchFindPrevious() bool {
+	return C.vte_terminal_search_find_previous(t.vteTerm) == C.TRUE
 }
 
-// GrabFocus assigns keyboard focus directly to VTE terminal
-func (t *Terminal) GrabFocus() {
-	if t.Widget != nil {
-		t.Widget.GrabFocus()
-	}
-}
-
-// FeedText writes text into terminal emulator for rendering
-func (t *Terminal) FeedText(text string) {
-	cText := C.CString(text)
-	defer C.free(unsafe.Pointer(cText))
-	C.vte_terminal_feed(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)), cText, C.glong(len(text)))
-}
-
-// CopyClipboard copies active terminal selection to clipboard
-func (t *Terminal) CopyClipboard() {
-	C.vte_terminal_copy_clipboard_format(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)), C.VTE_FORMAT_TEXT)
-}
-
-// PasteClipboard pastes text from system clipboard to terminal
-func (t *Terminal) PasteClipboard() {
-	C.vte_terminal_paste_clipboard(C.TO_VTE_TERMINAL(unsafe.Pointer(t.Widget.GWidget)))
+// ApplyColorScheme applies color palette to terminal
+func (t *Terminal) ApplyColorScheme(scheme string) {
+	cScheme := C.CString(scheme)
+	defer C.free(unsafe.Pointer(cScheme))
+	C.set_terminal_scheme_colors(t.vteWidget, cScheme)
 }
