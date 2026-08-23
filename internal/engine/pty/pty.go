@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // Winsize represents terminal window dimensions
@@ -27,14 +28,29 @@ type PTYBridge struct {
 	closed bool
 }
 
-// Open creates a new connected PTY master and slave pair
+// Open creates a new connected PTY master and slave pair in RAW mode
 func Open() (*PTYBridge, error) {
 	master, slave, err := pty.Open()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pty: %w", err)
 	}
 
-	// Crucial: Set Master FD to non-blocking so GTK/VTE never block the main UI loop
+	// Crucial: Set Slave PTY to RAW mode (disable ICANON and ECHO)
+	// Without raw mode, kernel line discipline waits for '\n' before delivering prompt bytes to VTE,
+	// causing blocking read() in gtk_main!
+	termios, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+	if err == nil {
+		termios.Iflag &^= (unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON)
+		termios.Oflag &^= unix.OPOST
+		termios.Lflag &^= (unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN)
+		termios.Cflag &^= (unix.CSIZE | unix.PARENB)
+		termios.Cflag |= unix.CS8
+		termios.Cc[unix.VMIN] = 1
+		termios.Cc[unix.VTIME] = 0
+		_ = unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, termios)
+	}
+
+	// Set Master FD to non-blocking so VTE IO channel never blocks the GTK event loop
 	_ = syscall.SetNonblock(int(master.Fd()), true)
 
 	return &PTYBridge{
