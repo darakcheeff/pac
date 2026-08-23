@@ -27,6 +27,7 @@ func NewSearchBar() (*SearchBar, error) {
 	if err != nil {
 		return nil, err
 	}
+	box.SetNoShowAll(true)
 	box.SetMarginStart(6)
 	box.SetMarginEnd(6)
 	box.SetMarginTop(2)

@@ -334,26 +334,32 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	sepTool1, _ := gtk.SeparatorToolItemNew()
 	app.ToolBar.Insert(sepTool1, -1)
 
-	// 3. Split Horizontal
-	btnSplitH, _ := gtk.ToolButtonNew(nil, "Сплит H")
-	btnSplitH.SetIconName("view-paged-symbolic")
-	btnSplitH.SetTooltipText("Разделить активную вкладку по горизонтали (верхний и нижний терминалы)")
+	// 3. Split Horizontal (Top / Bottom)
+	btnSplitH, _ := gtk.ToolButtonNew(GetSplitHorizontalImage(), "Разделить горизонтально")
+	btnSplitH.SetTooltipText("Разделить экран по горизонтали (сверху и снизу)")
 	btnSplitH.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
-			app.handleSplit(tab.Session, false)
+			sess := tab.Session
+			if tab.FocusedPane != nil {
+				sess = tab.FocusedPane.Session
+			}
+			app.handleSplit(sess, false)
 		}
 	})
 	app.ToolBar.Insert(btnSplitH, -1)
 
-	// 4. Split Vertical
-	btnSplitV, _ := gtk.ToolButtonNew(nil, "Сплит V")
-	btnSplitV.SetIconName("view-dual-symbolic")
-	btnSplitV.SetTooltipText("Разделить активную вкладку по вертикали (левый и правый терминалы)")
+	// 4. Split Vertical (Left / Right)
+	btnSplitV, _ := gtk.ToolButtonNew(GetSplitVerticalImage(), "Разделить вертикально")
+	btnSplitV.SetTooltipText("Разделить экран по вертикали (слева и справа)")
 	btnSplitV.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
-			app.handleSplit(tab.Session, true)
+			sess := tab.Session
+			if tab.FocusedPane != nil {
+				sess = tab.FocusedPane.Session
+			}
+			app.handleSplit(sess, true)
 		}
 	})
 	app.ToolBar.Insert(btnSplitV, -1)
@@ -456,10 +462,12 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 	}
 
 	var targetHost *storage.Host
-	if tab.Session != nil && tab.Session.Host != nil {
-		targetHost = tab.Session.Host
-	} else if sess != nil && sess.Host != nil {
+	if sess != nil && sess.Host != nil {
 		targetHost = sess.Host
+	} else if tab.FocusedPane != nil && tab.FocusedPane.Session != nil && tab.FocusedPane.Session.Host != nil {
+		targetHost = tab.FocusedPane.Session.Host
+	} else if tab.Session != nil && tab.Session.Host != nil {
+		targetHost = tab.Session.Host
 	}
 
 	if targetHost == nil {

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/darakcheeff/pac/internal/session"
@@ -10,29 +11,28 @@ import (
 	"github.com/gotk3/gotk3/gtk"
 )
 
-// SplitPane represents a split terminal container inside a tab
-type SplitPane struct {
+// TerminalPane represents an individual terminal pane inside a tab
+type TerminalPane struct {
 	Session  *session.Session
 	Terminal *vte.Terminal
 	Box      *gtk.Box
 	Search   *SearchBar
+	TabItem  *TabItem
 }
 
-// TabItem represents one open session tab inside the notebook
+// TabItem represents one open session tab inside the notebook (can hold multiple split panes)
 type TabItem struct {
-	ID         string
-	Session    *session.Session
-	Terminal   *vte.Terminal
-	Label      *gtk.Label
-	TabBox     *gtk.Box
-	EventBox   *gtk.EventBox
-	ContentBox *gtk.Box
-	Search     *SearchBar
-	Paned      *gtk.Paned
-	SplitChild *SplitPane
+	ID          string
+	Session     *session.Session
+	Label       *gtk.Label
+	TabBox      *gtk.Box
+	EventBox    *gtk.EventBox
+	ContentBox  *gtk.Box
+	Panes       []*TerminalPane
+	FocusedPane *TerminalPane
 }
 
-// TabView manages notebook tabs and splits
+// TabView manages notebook tabs and terminal splits
 type TabView struct {
 	Notebook         *gtk.Notebook
 	items            []*TabItem
@@ -41,6 +41,7 @@ type TabView struct {
 	OnSplitRequested func(sess *session.Session, vertical bool)
 }
 
+// NewTabView initializes the GTK Notebook tab manager
 func NewTabView() (*TabView, error) {
 	nb, err := gtk.NotebookNew()
 	if err != nil {
@@ -58,11 +59,16 @@ func NewTabView() (*TabView, error) {
 	nb.Connect("switch-page", func(_ *gtk.Notebook, page *gtk.Widget, pageNum uint) {
 		item := tv.GetCurrentTab()
 		if item != nil {
-			if item.Terminal != nil {
-				item.Terminal.GrabFocus()
-			}
-			if tv.OnTabChanged != nil {
-				tv.OnTabChanged(item.Session)
+			if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
+				item.FocusedPane.Terminal.GrabFocus()
+				if tv.OnTabChanged != nil {
+					tv.OnTabChanged(item.FocusedPane.Session)
+				}
+			} else if len(item.Panes) > 0 && item.Panes[0].Terminal != nil {
+				item.Panes[0].Terminal.GrabFocus()
+				if tv.OnTabChanged != nil {
+					tv.OnTabChanged(item.Panes[0].Session)
+				}
 			}
 		}
 	})
@@ -70,19 +76,60 @@ func NewTabView() (*TabView, error) {
 	return tv, nil
 }
 
-// AddTab creates a new tab with custom header (title, close btn, rename, dnd)
+// createPane constructs a TerminalPane with its search bar and event listeners
+func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Terminal) *TerminalPane {
+	box, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	box.SetHExpand(true)
+	box.SetVExpand(true)
+
+	searchBar, _ := NewSearchBar()
+	searchBar.SetActiveTerminal(term)
+
+	box.PackStart(searchBar.Box, false, false, 0)
+	box.PackStart(term.Widget, true, true, 0)
+
+	pane := &TerminalPane{
+		Session:  sess,
+		Terminal: term,
+		Box:      box,
+		Search:   searchBar,
+		TabItem:  item,
+	}
+
+	// Focus and click handling
+	term.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
+		btnEvent := gdk.EventButtonNewFromEvent(event)
+		item.FocusedPane = pane
+		if tv.OnTabChanged != nil {
+			tv.OnTabChanged(sess)
+		}
+		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
+			tv.showTerminalContextMenu(pane, btnEvent.Time())
+			return true
+		}
+		return false
+	})
+
+	term.Widget.Connect("focus-in-event", func() {
+		item.FocusedPane = pane
+		if tv.OnTabChanged != nil {
+			tv.OnTabChanged(sess)
+		}
+	})
+
+	return pane
+}
+
+// AddTab creates a new tab with custom header
 func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, error) {
 	contentBox, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 	if err != nil {
 		return nil, err
 	}
+	contentBox.SetHExpand(true)
+	contentBox.SetVExpand(true)
 
-	searchBar, _ := NewSearchBar()
-	searchBar.SetActiveTerminal(term)
-	contentBox.PackStart(searchBar.Box, false, false, 0)
-	contentBox.PackStart(term.Widget, true, true, 0)
-
-	// EventBox wrapper for tab header to receive click & right-click events
+	// EventBox wrapper for tab header
 	eventBox, _ := gtk.EventBoxNew()
 	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK))
 
@@ -103,30 +150,32 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 
 	eventBox.Add(tabBox)
 	eventBox.ShowAll()
-	contentBox.ShowAll()
-	searchBar.Hide()
-
-	pageNum := tv.Notebook.AppendPage(contentBox, eventBox)
-	tv.Notebook.SetTabReorderable(contentBox, true)
 
 	item := &TabItem{
 		ID:         sess.ID,
 		Session:    sess,
-		Terminal:   term,
 		Label:      titleLabel,
 		TabBox:     tabBox,
 		EventBox:   eventBox,
 		ContentBox: contentBox,
-		Search:     searchBar,
+		Panes:      make([]*TerminalPane, 0),
 	}
+
+	pane := tv.createPane(item, sess, term)
+	item.Panes = append(item.Panes, pane)
+	item.FocusedPane = pane
+
+	contentBox.PackStart(pane.Box, true, true, 0)
+	contentBox.ShowAll()
+
+	pageNum := tv.Notebook.AppendPage(contentBox, eventBox)
+	tv.Notebook.SetTabReorderable(contentBox, true)
 	tv.items = append(tv.items, item)
 
-	// Close tab button action
 	closeBtn.Connect("clicked", func() {
 		tv.CloseTab(item)
 	})
 
-	// Header click actions on EventBox (Left Double Click = Rename, Right Click = Tab Menu)
 	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		if btnEvent.Type() == gdk.EVENT_2BUTTON_PRESS && btnEvent.Button() == gdk.BUTTON_PRIMARY {
@@ -139,128 +188,219 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		return false
 	})
 
-	// Terminal right-click context menu
-	term.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
-		btnEvent := gdk.EventButtonNewFromEvent(event)
-		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
-			tv.showTerminalContextMenu(item, btnEvent.Time())
-			return true
-		}
-		return false
-	})
-
 	tv.Notebook.SetCurrentPage(pageNum)
 	term.GrabFocus()
 	return item, nil
 }
 
-// SplitActiveTab splits current tab into two terminals (horizontal or vertical)
+// SplitActiveTab splits the focused pane in the tab (vertical = left/right, horizontal = top/bottom)
 func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTerm *vte.Terminal, vertical bool) error {
 	if item == nil || item.ContentBox == nil {
 		log.Printf("[TAB] SplitActiveTab: item or ContentBox is nil")
 		return nil
 	}
 
-	log.Printf("[TAB] Splitting tab %q (vertical=%v)", item.Session.Title, vertical)
+	targetPane := item.FocusedPane
+	if targetPane == nil && len(item.Panes) > 0 {
+		targetPane = item.Panes[0]
+	}
+	if targetPane == nil {
+		log.Printf("[TAB] SplitActiveTab: no target pane available")
+		return nil
+	}
 
-	// Create paned container
-	orientation := gtk.ORIENTATION_HORIZONTAL
-	if !vertical {
-		orientation = gtk.ORIENTATION_VERTICAL
+	log.Printf("[TAB] Splitting pane %q (vertical=%v)", targetPane.Session.Title, vertical)
+
+	// Orientation: vertical = left/right (ORIENTATION_HORIZONTAL), horizontal = top/bottom (ORIENTATION_VERTICAL)
+	orientation := gtk.ORIENTATION_VERTICAL
+	if vertical {
+		orientation = gtk.ORIENTATION_HORIZONTAL
 	}
 
 	paned, err := gtk.PanedNew(orientation)
 	if err != nil {
 		return err
 	}
+	paned.SetWideHandle(true)
+	paned.SetHExpand(true)
+	paned.SetVExpand(true)
 
-	// Remove original term from contentBox
-	item.ContentBox.Remove(item.Terminal.Widget)
+	newPane := tv.createPane(item, newSess, newTerm)
 
-	// Create SplitChild
-	splitSearch, _ := NewSearchBar()
-	splitSearch.SetActiveTerminal(newTerm)
-	splitBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
-	splitBox.PackStart(splitSearch.Box, false, false, 0)
-	splitBox.PackStart(newTerm.Widget, true, true, 0)
-	splitSearch.Hide()
+	// Determine parent container of targetPane.Box
+	parentObj, pErr := targetPane.Box.GetParent()
+	if pErr != nil || parentObj == nil {
+		log.Printf("[TAB] ERROR: cannot get parent of target pane: %v", pErr)
+		return pErr
+	}
 
-	// Pack original terminal in Pack1 and new terminal in Pack2
-	paned.Pack1(item.Terminal.Widget, true, false)
-	paned.Pack2(splitBox, true, false)
-
-	if vertical {
-		paned.SetPosition(400)
+	if parentObj.Native() == item.ContentBox.Native() {
+		// Target pane was directly in contentBox
+		item.ContentBox.Remove(targetPane.Box)
+		paned.Pack1(targetPane.Box, true, false)
+		paned.Pack2(newPane.Box, true, false)
+		item.ContentBox.PackStart(paned, true, true, 0)
 	} else {
-		paned.SetPosition(250)
-	}
+		// Target pane was inside an existing Paned
+		parentPaned := &gtk.Paned{Container: gtk.Container{Widget: *parentObj}}
+		c1, _ := parentPaned.GetChild1()
 
-	item.ContentBox.PackStart(paned, true, true, 0)
-	item.Paned = paned
-	item.SplitChild = &SplitPane{
-		Session:  newSess,
-		Terminal: newTerm,
-		Box:      splitBox,
-		Search:   splitSearch,
-	}
-
-	newTerm.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
-		btnEvent := gdk.EventButtonNewFromEvent(event)
-		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
-			tv.showSplitContextMenu(item, btnEvent.Time())
-			return true
+		if c1 != nil && c1.Native() == targetPane.Box.Native() {
+			parentPaned.Remove(targetPane.Box)
+			paned.Pack1(targetPane.Box, true, false)
+			paned.Pack2(newPane.Box, true, false)
+			parentPaned.Pack1(paned, true, false)
+		} else {
+			parentPaned.Remove(targetPane.Box)
+			paned.Pack1(targetPane.Box, true, false)
+			paned.Pack2(newPane.Box, true, false)
+			parentPaned.Pack2(paned, true, false)
 		}
-		return false
+	}
+
+	// Auto-center the divider at 50%
+	paned.Connect("size-allocate", func(_ *gtk.Paned, alloc *gdk.Rectangle) {
+		if vertical {
+			w := alloc.GetWidth()
+			if w > 40 && paned.GetPosition() <= 10 {
+				paned.SetPosition(w / 2)
+			}
+		} else {
+			h := alloc.GetHeight()
+			if h > 40 && paned.GetPosition() <= 10 {
+				paned.SetPosition(h / 2)
+			}
+		}
 	})
 
+	item.Panes = append(item.Panes, newPane)
+	item.FocusedPane = newPane
+
 	item.ContentBox.ShowAll()
-	splitSearch.Hide()
 	newTerm.GrabFocus()
 	return nil
 }
 
-// UnsplitTab restores tab to single terminal and detaches split child into its own tab
+// ClosePane removes an individual split pane from the tab hierarchy
+func (tv *TabView) ClosePane(pane *TerminalPane) {
+	if pane == nil || pane.TabItem == nil {
+		return
+	}
+	item := pane.TabItem
+	if len(item.Panes) <= 1 {
+		// Only 1 pane in tab, close entire tab
+		tv.CloseTab(item)
+		return
+	}
+
+	parentObj, pErr := pane.Box.GetParent()
+	if pErr != nil || parentObj == nil {
+		return
+	}
+
+	parentPaned := &gtk.Paned{Container: gtk.Container{Widget: *parentObj}}
+	c1, _ := parentPaned.GetChild1()
+	c2, _ := parentPaned.GetChild2()
+
+	var sibling *gtk.Widget
+	if c1 != nil && c1.Native() == pane.Box.Native() {
+		sibling = c2
+	} else {
+		sibling = c1
+	}
+
+	grandParentObj, _ := parentPaned.GetParent()
+	parentPaned.Remove(pane.Box)
+	if sibling != nil {
+		parentPaned.Remove(sibling)
+	}
+
+	if grandParentObj != nil {
+		if grandParentObj.Native() == item.ContentBox.Native() {
+			item.ContentBox.Remove(parentPaned)
+			if sibling != nil {
+				item.ContentBox.PackStart(sibling, true, true, 0)
+			}
+		} else {
+			grandPaned := &gtk.Paned{Container: gtk.Container{Widget: *grandParentObj}}
+			gc1, _ := grandPaned.GetChild1()
+			if gc1 != nil && gc1.Native() == parentPaned.Native() {
+				grandPaned.Remove(parentPaned)
+				if sibling != nil {
+					grandPaned.Pack1(sibling, true, false)
+				}
+			} else {
+				grandPaned.Remove(parentPaned)
+				if sibling != nil {
+					grandPaned.Pack2(sibling, true, false)
+				}
+			}
+		}
+	}
+
+	// Remove from item.Panes
+	newPanes := make([]*TerminalPane, 0, len(item.Panes)-1)
+	for _, p := range item.Panes {
+		if p != pane {
+			newPanes = append(newPanes, p)
+		}
+	}
+	item.Panes = newPanes
+
+	if pane.Session != nil {
+		_ = pane.Session.Close()
+	}
+
+	if len(item.Panes) > 0 {
+		item.FocusedPane = item.Panes[0]
+		if item.FocusedPane.Terminal != nil {
+			item.FocusedPane.Terminal.GrabFocus()
+		}
+	}
+
+	item.ContentBox.ShowAll()
+}
+
+// UnsplitTab moves all split panes except the first one into their own individual tabs
 func (tv *TabView) UnsplitTab(item *TabItem) {
-	if item == nil || item.Paned == nil || item.SplitChild == nil {
+	if item == nil || len(item.Panes) <= 1 {
 		return
 	}
 
-	childSess := item.SplitChild.Session
-	childTerm := item.SplitChild.Terminal
+	primaryPane := item.Panes[0]
+	extraPanes := item.Panes[1:]
 
-	// Remove paned and restore single terminal
-	item.ContentBox.Remove(item.Paned)
-	item.ContentBox.PackStart(item.Terminal.Widget, true, true, 0)
-	item.Paned = nil
-	item.SplitChild = nil
-	item.ContentBox.ShowAll()
-
-	// Open child as new tab
-	_, _ = tv.AddTab(childSess, childTerm)
-}
-
-// CloseSplit closes split pane without closing original tab
-func (tv *TabView) CloseSplit(item *TabItem) {
-	if item == nil || item.Paned == nil || item.SplitChild == nil {
-		return
+	// Clear contentBox and restore primary pane alone
+	for _, child := range item.ContentBox.GetChildren() {
+		w := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: child.Data().(*glib.Object)}}
+		item.ContentBox.Remove(w)
 	}
 
-	childSess := item.SplitChild.Session
-	item.ContentBox.Remove(item.Paned)
-	item.ContentBox.PackStart(item.Terminal.Widget, true, true, 0)
-	item.Paned = nil
-	item.SplitChild = nil
+	item.Panes = []*TerminalPane{primaryPane}
+	item.FocusedPane = primaryPane
+	item.ContentBox.PackStart(primaryPane.Box, true, true, 0)
 	item.ContentBox.ShowAll()
 
-	if childSess != nil {
-		_ = childSess.Close()
+	// Open extra panes as standalone tabs
+	for _, extra := range extraPanes {
+		_, _ = tv.AddTab(extra.Session, extra.Terminal)
 	}
 }
 
-// CloseTab closes tab and session
+// CloseTab closes entire tab and all underlying split sessions
 func (tv *TabView) CloseTab(item *TabItem) {
 	if item == nil {
 		return
+	}
+
+	// Close all pane sessions
+	for _, p := range item.Panes {
+		if p.Session != nil {
+			if tv.OnTabClosed != nil {
+				tv.OnTabClosed(p.Session)
+			}
+			_ = p.Session.Close()
+		}
 	}
 
 	pageNum := tv.Notebook.PageNum(item.ContentBox)
@@ -268,94 +408,67 @@ func (tv *TabView) CloseTab(item *TabItem) {
 		tv.Notebook.RemovePage(pageNum)
 	}
 
-	// Remove from items slice
-	for i, it := range tv.items {
-		if it == item {
-			tv.items = append(tv.items[:i], tv.items[i+1:]...)
-			break
+	newItems := make([]*TabItem, 0, len(tv.items)-1)
+	for _, it := range tv.items {
+		if it != item {
+			newItems = append(newItems, it)
 		}
 	}
-
-	if item.SplitChild != nil && item.SplitChild.Session != nil {
-		_ = item.SplitChild.Session.Close()
-	}
-
-	if tv.OnTabClosed != nil {
-		tv.OnTabClosed(item.Session)
-	}
+	tv.items = newItems
 }
 
-// FindTabBySession finds TabItem containing the specified session
+// GetCurrentTab returns active selected TabItem
+func (tv *TabView) GetCurrentTab() *TabItem {
+	pageNum := tv.Notebook.GetCurrentPage()
+	if pageNum < 0 || pageNum >= len(tv.items) {
+		return nil
+	}
+	widget, err := tv.Notebook.GetNthPage(pageNum)
+	if err != nil || widget == nil {
+		return nil
+	}
+	for _, item := range tv.items {
+		if item.ContentBox.Native() == widget.Native() {
+			return item
+		}
+	}
+	return nil
+}
+
+// FindTabBySession finds TabItem by Session ID or session instance
 func (tv *TabView) FindTabBySession(sess *session.Session) *TabItem {
 	if sess == nil {
 		return nil
 	}
-	for _, it := range tv.items {
-		if it.Session != nil && it.Session.ID == sess.ID {
-			return it
+	for _, item := range tv.items {
+		for _, p := range item.Panes {
+			if p.Session == sess || p.Session.ID == sess.ID {
+				return item
+			}
 		}
-		if it.SplitChild != nil && it.SplitChild.Session != nil && it.SplitChild.Session.ID == sess.ID {
-			return it
+		if item.Session == sess || item.Session.ID == sess.ID {
+			return item
 		}
 	}
 	return nil
-}
-
-// GetCurrentTab returns active TabItem based on current notebook page
-func (tv *TabView) GetCurrentTab() *TabItem {
-	curPage := tv.Notebook.GetCurrentPage()
-	if curPage < 0 {
-		if len(tv.items) > 0 {
-			return tv.items[0]
-		}
-		return nil
-	}
-
-	for _, it := range tv.items {
-		if it.ContentBox != nil && tv.Notebook.PageNum(it.ContentBox) == curPage {
-			return it
-		}
-	}
-
-	if curPage < len(tv.items) {
-		return tv.items[curPage]
-	}
-	return nil
-}
-
-// GetAllTabs returns all active TabItems
-func (tv *TabView) GetAllTabs() []*TabItem {
-	return tv.items
 }
 
 func (tv *TabView) showRenameDialog(item *TabItem) {
 	dlg, _ := gtk.DialogNew()
 	dlg.SetTitle("Переименовать вкладку")
 	dlg.SetModal(true)
-	dlg.SetDefaultSize(320, 120)
+	dlg.SetDefaultSize(300, 100)
 
 	contentArea, _ := dlg.GetContentArea()
-	vbox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 6)
-	vbox.SetMarginStart(12)
-	vbox.SetMarginEnd(12)
-	vbox.SetMarginTop(12)
-	vbox.SetMarginBottom(12)
-
-	lbl, _ := gtk.LabelNew("Новое имя вкладки:")
-	lbl.SetHAlign(gtk.ALIGN_START)
-	vbox.PackStart(lbl, false, false, 0)
-
 	entry, _ := gtk.EntryNew()
 	entry.SetText(item.Session.Title)
 	entry.SetActivatesDefault(true)
-	vbox.PackStart(entry, false, false, 0)
-
-	contentArea.Add(vbox)
+	contentArea.Add(entry)
 
 	_, _ = dlg.AddButton("Отмена", gtk.RESPONSE_CANCEL)
-	btnSave, _ := dlg.AddButton("Сохранить", gtk.RESPONSE_OK)
-	btnSave.SetCanDefault(true)
-	dlg.SetDefault(btnSave)
+	btnOk, _ := dlg.AddButton("Сохранить", gtk.RESPONSE_OK)
+	btnOk.SetCanDefault(true)
+	dlg.SetDefault(btnOk)
 
 	dlg.ShowAll()
 
@@ -372,49 +485,48 @@ func (tv *TabView) showRenameDialog(item *TabItem) {
 func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
-	mRename, _ := gtk.MenuItemNewWithLabel("Переименовать вкладку (F2)")
+	mRename, _ := gtk.MenuItemNewWithLabel("Переименовать вкладку...")
 	mRename.Connect("activate", func() {
 		tv.showRenameDialog(item)
 	})
 	menu.Append(mRename)
 
-	sep1, _ := gtk.SeparatorMenuItemNew()
-	menu.Append(sep1)
-
-	mSplitH, _ := gtk.MenuItemNewWithLabel("Разделить экран по горизонтали (Split Horizontal)")
+	mSplitH, _ := gtk.MenuItemNewWithLabel("Разделить по горизонтали (сверху / снизу)")
 	mSplitH.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
-			tv.OnSplitRequested(item.Session, false)
+			sess := item.Session
+			if item.FocusedPane != nil {
+				sess = item.FocusedPane.Session
+			}
+			tv.OnSplitRequested(sess, false)
 		}
 	})
 	menu.Append(mSplitH)
 
-	mSplitV, _ := gtk.MenuItemNewWithLabel("Разделить экран по вертикали (Split Vertical)")
+	mSplitV, _ := gtk.MenuItemNewWithLabel("Разделить по вертикали (слева / справа)")
 	mSplitV.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
-			tv.OnSplitRequested(item.Session, true)
+			sess := item.Session
+			if item.FocusedPane != nil {
+				sess = item.FocusedPane.Session
+			}
+			tv.OnSplitRequested(sess, true)
 		}
 	})
 	menu.Append(mSplitV)
 
-	if item.Paned != nil && item.SplitChild != nil {
-		mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать / Вынести сплит в новую вкладку")
+	if len(item.Panes) > 1 {
+		mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать сплит в отдельные вкладки")
 		mUnsplit.Connect("activate", func() {
 			tv.UnsplitTab(item)
 		})
 		menu.Append(mUnsplit)
-
-		mCloseSplit, _ := gtk.MenuItemNewWithLabel("Закрыть соседний сплит")
-		mCloseSplit.Connect("activate", func() {
-			tv.CloseSplit(item)
-		})
-		menu.Append(mCloseSplit)
 	}
 
-	sep2, _ := gtk.SeparatorMenuItemNew()
-	menu.Append(sep2)
+	sep, _ := gtk.SeparatorMenuItemNew()
+	menu.Append(sep)
 
-	mClose, _ := gtk.MenuItemNewWithLabel("Закрыть вкладку (Ctrl+W)")
+	mClose, _ := gtk.MenuItemNewWithLabel("Закрыть вкладку")
 	mClose.Connect("activate", func() {
 		tv.CloseTab(item)
 	})
@@ -424,84 +536,62 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.PopupAtPointer(nil)
 }
 
-func (tv *TabView) showSplitContextMenu(item *TabItem, eventTime uint32) {
+func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
-	mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать / Вынести этот терминал в новую вкладку")
-	mUnsplit.Connect("activate", func() {
-		tv.UnsplitTab(item)
-	})
-	menu.Append(mUnsplit)
-
-	mCloseSplit, _ := gtk.MenuItemNewWithLabel("Закрыть этот сплит")
-	mCloseSplit.Connect("activate", func() {
-		tv.CloseSplit(item)
-	})
-	menu.Append(mCloseSplit)
-
-	menu.ShowAll()
-	menu.PopupAtPointer(nil)
-}
-
-func (tv *TabView) showTerminalContextMenu(item *TabItem, eventTime uint32) {
-	menu, _ := gtk.MenuNew()
-
-	mCopy, _ := gtk.MenuItemNewWithLabel("Копировать")
+	mCopy, _ := gtk.MenuItemNewWithLabel("Копировать (Ctrl+Shift+C)")
 	mCopy.Connect("activate", func() {
-		item.Terminal.CopyClipboard()
+		pane.Terminal.CopyClipboard()
 	})
 	menu.Append(mCopy)
 
-	mPaste, _ := gtk.MenuItemNewWithLabel("Вставить")
+	mPaste, _ := gtk.MenuItemNewWithLabel("Вставить (Ctrl+Shift+V)")
 	mPaste.Connect("activate", func() {
-		item.Terminal.PasteClipboard()
+		pane.Terminal.PasteClipboard()
 	})
 	menu.Append(mPaste)
 
-	mSelectAll, _ := gtk.MenuItemNewWithLabel("Выделить всё")
-	mSelectAll.Connect("activate", func() {
-		item.Terminal.SelectAll()
-	})
-	menu.Append(mSelectAll)
+	sep1, _ := gtk.SeparatorMenuItemNew()
+	menu.Append(sep1)
 
-	sep, _ := gtk.SeparatorMenuItemNew()
-	menu.Append(sep)
-
-	mFind, _ := gtk.MenuItemNewWithLabel("Найти в терминале (Ctrl+Shift+F)")
-	mFind.Connect("activate", func() {
-		item.Search.Show()
-	})
-	menu.Append(mFind)
-
-	mSplitH, _ := gtk.MenuItemNewWithLabel("Разделить по горизонтали")
+	mSplitH, _ := gtk.MenuItemNewWithLabel("Разделить по горизонтали (сверху / снизу)")
 	mSplitH.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
-			tv.OnSplitRequested(item.Session, false)
+			tv.OnSplitRequested(pane.Session, false)
 		}
 	})
 	menu.Append(mSplitH)
 
-	mSplitV, _ := gtk.MenuItemNewWithLabel("Разделить по вертикали")
+	mSplitV, _ := gtk.MenuItemNewWithLabel("Разделить по вертикали (слева / справа)")
 	mSplitV.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
-			tv.OnSplitRequested(item.Session, true)
+			tv.OnSplitRequested(pane.Session, true)
 		}
 	})
 	menu.Append(mSplitV)
 
-	if item.Paned != nil && item.SplitChild != nil {
-		mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать сплит в новую вкладку")
-		mUnsplit.Connect("activate", func() {
-			tv.UnsplitTab(item)
+	if len(pane.TabItem.Panes) > 1 {
+		mClosePane, _ := gtk.MenuItemNewWithLabel("Закрыть этот терминал")
+		mClosePane.Connect("activate", func() {
+			tv.ClosePane(pane)
 		})
-		menu.Append(mUnsplit)
+		menu.Append(mClosePane)
 	}
 
-	mReset, _ := gtk.MenuItemNewWithLabel("Сброс и очистка истории")
-	mReset.Connect("activate", func() {
-		item.Terminal.Reset(true)
+	sep2, _ := gtk.SeparatorMenuItemNew()
+	menu.Append(sep2)
+
+	mFind, _ := gtk.MenuItemNewWithLabel("Поиск в терминале... (Ctrl+Shift+F)")
+	mFind.Connect("activate", func() {
+		pane.Search.Show()
 	})
-	menu.Append(mReset)
+	menu.Append(mFind)
+
+	mClear, _ := gtk.MenuItemNewWithLabel("Очистить терминал")
+	mClear.Connect("activate", func() {
+		pane.Terminal.Reset(true)
+	})
+	menu.Append(mClear)
 
 	menu.ShowAll()
 	menu.PopupAtPointer(nil)
