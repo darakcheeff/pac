@@ -13,48 +13,40 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store handles database operations
 type Store struct {
-	db   *sql.DB
-	mu   sync.RWMutex
-	path string
+	db *sql.DB
+	mu sync.RWMutex
 }
 
-// NewStore initializes or opens SQLite database at dbPath
+// NewStore initializes SQLite database with foreign keys and WAL mode
 func NewStore(dbPath string) (*Store, error) {
-	if dbPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		dbPath = filepath.Join(home, ".config", "pac", "pac.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
-		return nil, fmt.Errorf("failed to create config dir: %w", err)
-	}
-
-	log.Printf("[DB] Opening SQLite database at: %s", dbPath)
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", dbPath)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
 	}
 
-	store := &Store{db: db, path: dbPath}
+	db.SetMaxOpenConns(1) // Avoid database locked errors with SQLite WAL
+
+	store := &Store{db: db}
 	if err := store.initSchema(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to init schema: %w", err)
+		return nil, fmt.Errorf("failed to init db schema: %w", err)
 	}
 
 	return store, nil
 }
 
-// Path returns absolute database file path
-func (s *Store) Path() string {
-	return s.path
+// DB returns the underlying *sql.DB connection
+func (s *Store) DB() *sql.DB {
+	return s.db
 }
 
-// Close closes the database connection
+// Close closes the database connection cleanly
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -177,7 +169,7 @@ func (s *Store) GetAllGroups() ([]Group, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query("SELECT id, parent_id, name, icon, sort_order, created_at, updated_at FROM groups ORDER BY sort_order, name")
+	rows, err := s.db.Query("SELECT id, COALESCE(parent_id, ''), name, COALESCE(icon, ''), sort_order, created_at, updated_at FROM groups ORDER BY sort_order, name")
 	if err != nil {
 		return nil, err
 	}
@@ -221,26 +213,23 @@ func (s *Store) DeleteGroup(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if id == "root" {
-		return fmt.Errorf("cannot delete root group")
-	}
-
 	_, err := s.db.Exec("DELETE FROM groups WHERE id = ?", id)
 	return err
 }
 
 // --- Hosts CRUD ---
 
+const hostSelectCols = `id, COALESCE(group_id, 'root'), name, COALESCE(description, ''), protocol, COALESCE(host, ''), COALESCE(port, 22), COALESCE(username, ''), COALESCE(auth_method, 'password'),
+	COALESCE(password, ''), COALESCE(key_path, ''), COALESCE(key_pass, ''), COALESCE(x11_forwarding, 0), COALESCE(proxy_jump_host, ''), COALESCE(port_forwards, '[]'), COALESCE(auto_sftp, 1),
+	COALESCE(serial_port, ''), COALESCE(serial_baud_rate, 115200), COALESCE(serial_data_bits, 8), COALESCE(serial_stop_bits, 1), COALESCE(serial_parity, 'N'),
+	COALESCE(terminal_type, 'xterm-256color'), COALESCE(font_name, 'Monospace 11'), COALESCE(color_scheme, 'mate'), COALESCE(scrollback_lines, 10000), COALESCE(enable_logging, 0), COALESCE(log_path_format, ''),
+	COALESCE(log_clean_ansi, 1), COALESCE(restore_history, 1), COALESCE(notes, ''), COALESCE(sort_order, 0), COALESCE(created_at, CURRENT_TIMESTAMP), COALESCE(updated_at, CURRENT_TIMESTAMP)`
+
 func (s *Store) GetAllHosts() ([]Host, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT id, group_id, name, description, protocol, host, port, username, auth_method,
-		password, key_path, key_pass, x11_forwarding, proxy_jump_host, port_forwards, auto_sftp,
-		serial_port, serial_baud_rate, serial_data_bits, serial_stop_bits, serial_parity,
-		terminal_type, font_name, color_scheme, scrollback_lines, enable_logging, log_path_format,
-		log_clean_ansi, restore_history, notes, sort_order, created_at, updated_at
-		FROM hosts ORDER BY sort_order, name`)
+	rows, err := s.db.Query("SELECT " + hostSelectCols + " FROM hosts ORDER BY sort_order, name")
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +247,6 @@ func (s *Store) GetAllHosts() ([]Host, error) {
 			&h.LogCleanANSI, &h.RestoreHistory, &h.Notes, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
 		)
 		if err != nil {
-			// fallback without port_forwards
 			return nil, err
 		}
 		if portForwardsJSON != "" {
@@ -269,19 +257,13 @@ func (s *Store) GetAllHosts() ([]Host, error) {
 	return hosts, nil
 }
 
-
 func (s *Store) GetHost(id string) (*Host, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var h Host
 	var portForwardsJSON string
-	row := s.db.QueryRow(`SELECT id, group_id, name, description, protocol, host, port, username, auth_method,
-		password, key_path, key_pass, x11_forwarding, proxy_jump_host, port_forwards, auto_sftp,
-		serial_port, serial_baud_rate, serial_data_bits, serial_stop_bits, serial_parity,
-		terminal_type, font_name, color_scheme, scrollback_lines, enable_logging, log_path_format,
-		log_clean_ansi, restore_history, notes, sort_order, created_at, updated_at
-		FROM hosts WHERE id = ?`, id)
+	row := s.db.QueryRow("SELECT " + hostSelectCols + " FROM hosts WHERE id = ?", id)
 
 	err := row.Scan(
 		&h.ID, &h.GroupID, &h.Name, &h.Description, &h.Protocol, &h.Host, &h.Port, &h.Username, &h.AuthMethod,
@@ -369,9 +351,9 @@ func (s *Store) DeleteHost(id string) error {
 	return err
 }
 
-// --- Notes CRUD ---
+// --- Notes ---
 
-func (s *Store) GetNote(hostID string) (string, error) {
+func (s *Store) GetNotes(hostID string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -383,7 +365,7 @@ func (s *Store) GetNote(hostID string) (string, error) {
 	return content, err
 }
 
-func (s *Store) SaveNote(hostID, content string) error {
+func (s *Store) SaveNotes(hostID, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -403,8 +385,13 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT id, host_id, title, protocol, tab_index, split_parent_id,
-		split_direction, working_dir, scrollback_dump, notes, saved_at
+	rows, err := s.db.Query(`SELECT id, host_id, title, protocol, tab_index,
+		COALESCE(split_parent_id, ''),
+		COALESCE(split_direction, 'none'),
+		COALESCE(working_dir, ''),
+		COALESCE(scrollback_dump, ''),
+		COALESCE(notes, ''),
+		COALESCE(saved_at, CURRENT_TIMESTAMP)
 		FROM saved_sessions ORDER BY tab_index`)
 	if err != nil {
 		log.Printf("[DB] ERROR querying saved_sessions: %v", err)
@@ -480,33 +467,40 @@ func (s *Store) GetSettings() (*AppSettings, error) {
 		AutoRestoreSessions: true,
 	}
 
-	var data string
-	err := s.db.QueryRow("SELECT value FROM app_settings WHERE key = 'global'").Scan(&data)
-	if err == sql.ErrNoRows {
+	rows, err := s.db.Query("SELECT key, value FROM app_settings")
+	if err != nil {
 		return defaults, nil
 	}
-	if err != nil {
-		return nil, err
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, val string
+		if err := rows.Scan(&key, &val); err == nil {
+			switch key {
+			case "theme":
+				defaults.Theme = val
+			case "default_font":
+				defaults.DefaultFont = val
+			case "default_color_scheme":
+				defaults.DefaultColorScheme = val
+			case "default_editor":
+				defaults.DefaultEditor = val
+			case "default_logs_dir":
+				defaults.DefaultLogsDir = val
+			}
+		}
 	}
 
-	var settings AppSettings
-	if err := json.Unmarshal([]byte(data), &settings); err != nil {
-		return defaults, nil
-	}
-	return &settings, nil
+	return defaults, nil
 }
 
-func (s *Store) SaveSettings(settings *AppSettings) error {
+func (s *Store) SaveSetting(key, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	data, err := json.Marshal(settings)
-	if err != nil {
-		return err
-	}
-
-	query := `INSERT INTO app_settings (key, value) VALUES ('global', ?)
+	query := `INSERT INTO app_settings (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-	_, err = s.db.Exec(query, string(data))
+
+	_, err := s.db.Exec(query, key, value)
 	return err
 }
