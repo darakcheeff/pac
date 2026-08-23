@@ -87,17 +87,37 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	notesPanel, _ := NewNotesPanel(store)
 	broadcastBar, _ := NewBroadcastBar(manager)
 
-	leftPaned.Pack1(hostTree.Box, true, true)
-	leftPaned.Pack2(sftpPanel.Box, true, true)
-	leftPaned.SetPosition(320)
+	notesWidth := 250
+	leftWidth := 260
 
-	rightPaned.Pack1(tabView.Notebook, true, true)
-	rightPaned.Pack2(notesPanel.Box, true, true)
-	rightPaned.SetPosition(800)
+	leftPaned.Pack1(hostTree.Box, true, false)
+	leftPaned.Pack2(sftpPanel.Box, true, false)
 
-	leftRightPaned.Pack1(leftPaned, true, true)
-	leftRightPaned.Pack2(rightPaned, true, true)
-	leftRightPaned.SetPosition(280)
+	rightPaned.Pack1(tabView.Notebook, true, false)
+	rightPaned.Pack2(notesPanel.Box, false, false)
+
+	leftRightPaned.Pack1(leftPaned, false, false)
+	leftRightPaned.Pack2(rightPaned, true, false)
+
+	leftRightPaned.SetPosition(leftWidth)
+
+	// Dynamically recalculate all pane positions whenever window/paned size changes
+	rightPaned.Connect("size-allocate", func() {
+		totalW := rightPaned.GetAllocatedWidth()
+		if totalW > 350 {
+			pos := totalW - notesWidth
+			if pos > 150 {
+				rightPaned.SetPosition(pos)
+			}
+		}
+	})
+
+	leftPaned.Connect("size-allocate", func() {
+		totalH := leftPaned.GetAllocatedHeight()
+		if totalH > 150 {
+			leftPaned.SetPosition(int(float64(totalH) * 0.45))
+		}
+	})
 
 	mainBox.PackStart(leftRightPaned, true, true, 0)
 
