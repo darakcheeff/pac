@@ -15,7 +15,7 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	dlg.SetTitle("Быстрое подключение")
 	dlg.SetTransientFor(parent)
 	dlg.SetModal(true)
-	dlg.SetDefaultSize(400, 260)
+	dlg.SetDefaultSize(420, 280)
 
 	contentArea, _ := dlg.GetContentArea()
 	grid, _ := gtk.GridNew()
@@ -26,15 +26,27 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	grid.SetMarginTop(12)
 	grid.SetMarginBottom(12)
 
+	// Port entry declared early
+	entryPort, _ := gtk.EntryNew()
+	entryPort.SetText("22")
+
 	// Protocol
 	lblProto, _ := gtk.LabelNew("Протокол:")
 	lblProto.SetHAlign(gtk.ALIGN_END)
 	comboProto, _ := gtk.ComboBoxTextNew()
-	comboProto.Append("ssh", "SSH")
+	comboProto.Append("ssh", "SSH (Secure Shell)")
 	comboProto.Append("telnet", "Telnet")
-	comboProto.Append("serial", "Serial / COM")
+	comboProto.Append("serial", "Serial / COM-порт")
 	comboProto.Append("local", "Локальный терминал")
 	comboProto.SetActiveID("ssh")
+	comboProto.Connect("changed", func() {
+		p := comboProto.GetActiveID()
+		if p == "telnet" {
+			entryPort.SetText("23")
+		} else if p == "ssh" {
+			entryPort.SetText("22")
+		}
+	})
 	grid.Attach(lblProto, 0, 0, 1, 1)
 	grid.Attach(comboProto, 1, 0, 1, 1)
 
@@ -49,8 +61,6 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	// Port
 	lblPort, _ := gtk.LabelNew("Порт:")
 	lblPort.SetHAlign(gtk.ALIGN_END)
-	entryPort, _ := gtk.EntryNew()
-	entryPort.SetText("22")
 	grid.Attach(lblPort, 0, 2, 1, 1)
 	grid.Attach(entryPort, 1, 2, 1, 1)
 
