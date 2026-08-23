@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/darakcheeff/pac/internal/session"
@@ -10,6 +9,31 @@ import (
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
+
+// toPaned safely casts an IWidget to *gtk.Paned
+func toPaned(iw gtk.IWidget) *gtk.Paned {
+	if iw == nil {
+		return nil
+	}
+	if p, ok := iw.(*gtk.Paned); ok {
+		return p
+	}
+	return &gtk.Paned{
+		Bin: gtk.Bin{
+			Container: gtk.Container{
+				Widget: *iw.ToWidget(),
+			},
+		},
+	}
+}
+
+// areWidgetsEqual compares two IWidgets by underlying GObject pointer
+func areWidgetsEqual(w1, w2 gtk.IWidget) bool {
+	if w1 == nil || w2 == nil {
+		return w1 == w2
+	}
+	return w1.ToWidget().GObject == w2.ToWidget().GObject
+}
 
 // TerminalPane represents an individual terminal pane inside a tab
 type TerminalPane struct {
@@ -234,7 +258,7 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 		return pErr
 	}
 
-	if parentObj.Native() == item.ContentBox.Native() {
+	if areWidgetsEqual(parentObj, item.ContentBox) {
 		// Target pane was directly in contentBox
 		item.ContentBox.Remove(targetPane.Box)
 		paned.Pack1(targetPane.Box, true, false)
@@ -242,10 +266,10 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 		item.ContentBox.PackStart(paned, true, true, 0)
 	} else {
 		// Target pane was inside an existing Paned
-		parentPaned := &gtk.Paned{Container: gtk.Container{Widget: *parentObj}}
+		parentPaned := toPaned(parentObj)
 		c1, _ := parentPaned.GetChild1()
 
-		if c1 != nil && c1.Native() == targetPane.Box.Native() {
+		if c1 != nil && areWidgetsEqual(c1, targetPane.Box) {
 			parentPaned.Remove(targetPane.Box)
 			paned.Pack1(targetPane.Box, true, false)
 			paned.Pack2(newPane.Box, true, false)
@@ -258,7 +282,7 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 		}
 	}
 
-	// Auto-center the divider at 50%
+	// Auto-center divider at 50%
 	paned.Connect("size-allocate", func(_ *gtk.Paned, alloc *gdk.Rectangle) {
 		if vertical {
 			w := alloc.GetWidth()
@@ -288,7 +312,6 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 	}
 	item := pane.TabItem
 	if len(item.Panes) <= 1 {
-		// Only 1 pane in tab, close entire tab
 		tv.CloseTab(item)
 		return
 	}
@@ -298,12 +321,12 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 		return
 	}
 
-	parentPaned := &gtk.Paned{Container: gtk.Container{Widget: *parentObj}}
+	parentPaned := toPaned(parentObj)
 	c1, _ := parentPaned.GetChild1()
 	c2, _ := parentPaned.GetChild2()
 
-	var sibling *gtk.Widget
-	if c1 != nil && c1.Native() == pane.Box.Native() {
+	var sibling gtk.IWidget
+	if c1 != nil && areWidgetsEqual(c1, pane.Box) {
 		sibling = c2
 	} else {
 		sibling = c1
@@ -316,15 +339,15 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 	}
 
 	if grandParentObj != nil {
-		if grandParentObj.Native() == item.ContentBox.Native() {
+		if areWidgetsEqual(grandParentObj, item.ContentBox) {
 			item.ContentBox.Remove(parentPaned)
 			if sibling != nil {
 				item.ContentBox.PackStart(sibling, true, true, 0)
 			}
 		} else {
-			grandPaned := &gtk.Paned{Container: gtk.Container{Widget: *grandParentObj}}
+			grandPaned := toPaned(grandParentObj)
 			gc1, _ := grandPaned.GetChild1()
-			if gc1 != nil && gc1.Native() == parentPaned.Native() {
+			if gc1 != nil && areWidgetsEqual(gc1, parentPaned) {
 				grandPaned.Remove(parentPaned)
 				if sibling != nil {
 					grandPaned.Pack1(sibling, true, false)
@@ -371,9 +394,14 @@ func (tv *TabView) UnsplitTab(item *TabItem) {
 	extraPanes := item.Panes[1:]
 
 	// Clear contentBox and restore primary pane alone
-	for _, child := range item.ContentBox.GetChildren() {
-		w := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: child.Data().(*glib.Object)}}
-		item.ContentBox.Remove(w)
+	children := item.ContentBox.GetChildren()
+	if children != nil {
+		for l := children; l != nil; l = l.Next() {
+			if obj, ok := l.Data().(*glib.Object); ok {
+				w := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: obj}}
+				item.ContentBox.Remove(w)
+			}
+		}
 	}
 
 	item.Panes = []*TerminalPane{primaryPane}
@@ -428,7 +456,7 @@ func (tv *TabView) GetCurrentTab() *TabItem {
 		return nil
 	}
 	for _, item := range tv.items {
-		if item.ContentBox.Native() == widget.Native() {
+		if areWidgetsEqual(item.ContentBox, widget) {
 			return item
 		}
 	}
