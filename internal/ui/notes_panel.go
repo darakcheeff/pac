@@ -19,6 +19,7 @@ type NotesPanel struct {
 	store          *storage.Store
 	saveTimer      *time.Timer
 	isUpdating     bool
+	lastSavedText  string
 	mu             sync.Mutex
 }
 
@@ -40,7 +41,7 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 	titleLabel.SetHExpand(true)
 
 	clearBtn, _ := gtk.ButtonNewFromIconName("edit-clear-symbolic", gtk.ICON_SIZE_BUTTON)
-	clearBtn.SetTooltipText("Очистить заметку")
+	clearBtn.SetTooltipText("Очистить текст заметки")
 
 	headerBox.PackStart(titleLabel, true, true, 0)
 	headerBox.PackEnd(clearBtn, false, false, 0)
@@ -71,7 +72,7 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 		store:       store,
 	}
 
-	// Auto-save on change (debounced 300ms)
+	// Auto-save on change (debounced 500ms) with diff check
 	buf.Connect("changed", func() {
 		if !np.isUpdating {
 			np.scheduleAutoSave()
@@ -102,11 +103,13 @@ func (np *NotesPanel) LoadSessionNotes(sess *session.Session) {
 		np.HeaderLabel.SetText("Заметки (нет открытых вкладок)")
 		np.TextBuffer.SetText("")
 		np.TextView.SetSensitive(false)
+		np.lastSavedText = ""
 		return
 	}
 
 	np.TextView.SetSensitive(true)
 	np.HeaderLabel.SetText("Заметки вкладки: " + sess.Title)
+	np.lastSavedText = sess.Notes
 	np.TextBuffer.SetText(sess.Notes)
 }
 
@@ -121,6 +124,11 @@ func (np *NotesPanel) scheduleAutoSave() {
 	startIter := np.TextBuffer.GetStartIter()
 	endIter := np.TextBuffer.GetEndIter()
 	text, _ := np.TextBuffer.GetText(startIter, endIter, true)
+
+	if text == np.lastSavedText {
+		// No change, do not write to disk
+		return
+	}
 	np.currentSession.Notes = text
 
 	if np.saveTimer != nil {
@@ -128,9 +136,12 @@ func (np *NotesPanel) scheduleAutoSave() {
 	}
 
 	sess := np.currentSession
-	np.saveTimer = time.AfterFunc(300*time.Millisecond, func() {
-		if sess.Host != nil {
+	np.saveTimer = time.AfterFunc(500*time.Millisecond, func() {
+		np.mu.Lock()
+		if sess.Host != nil && text != np.lastSavedText {
+			np.lastSavedText = text
 			_ = np.store.SaveNote(sess.Host.ID, text)
 		}
+		np.mu.Unlock()
 	})
 }

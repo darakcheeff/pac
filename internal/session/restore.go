@@ -1,16 +1,25 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/darakcheeff/pac/internal/storage"
 )
 
-// SaveState dumps current active session states into SQLite database
+var (
+	stateCacheMu sync.Mutex
+	lastStateHash string
+)
+
+// SaveState dumps current active session states into SQLite database only when state has changed
 func SaveState(store *storage.Store, sessions []*Session) error {
 	var states []storage.SavedSessionState
+	hasher := sha256.New()
 
 	for idx, s := range sessions {
 		if s == nil {
@@ -46,16 +55,29 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 			SavedAt:        time.Now(),
 		}
 		states = append(states, st)
-		log.Printf("[STATE] Prepared session to save: ID=%s, Title=%q, HostID=%s, Protocol=%s, ScrollbackBytes=%d",
-			st.ID, st.Title, st.HostID, st.Protocol, len(st.ScrollbackDump))
+
+		// Feed hash state
+		hasher.Write([]byte(fmt.Sprintf("%s|%s|%s|%s|%d|%s|%s|%d\n",
+			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.WorkingDir, st.Notes, len(st.ScrollbackDump))))
 	}
 
-	log.Printf("[STATE] Saving %d active session states to database...", len(states))
+	currentHash := hex.EncodeToString(hasher.Sum(nil))
+
+	stateCacheMu.Lock()
+	if currentHash == lastStateHash {
+		stateCacheMu.Unlock()
+		// No changes detected since last save, skip disk writes entirely
+		return nil
+	}
+	lastStateHash = currentHash
+	stateCacheMu.Unlock()
+
+	log.Printf("[STATE] State change detected. Saving %d active session(s) to SQLite...", len(states))
 	err := store.SaveActiveSessions(states)
 	if err != nil {
 		log.Printf("[STATE] ERROR saving active sessions: %v", err)
 	} else {
-		log.Printf("[STATE] Successfully saved %d session states to database.", len(states))
+		log.Printf("[STATE] Successfully synced %d session state(s) to disk.", len(states))
 	}
 	return err
 }
