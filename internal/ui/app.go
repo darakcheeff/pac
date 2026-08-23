@@ -892,7 +892,7 @@ func (app *AppWindow) SaveAllSessionState() {
 				SplitDirection: splitDir,
 				WorkingDir:     workingDir,
 				ScrollbackDump: scrollback,
-				Notes:          item.Session.Notes,
+				Notes:          s.Notes,
 				SavedAt:        time.Now(),
 			}
 			states = append(states, st)

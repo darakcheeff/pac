@@ -108,7 +108,7 @@ func (np *NotesPanel) LoadSessionNotes(sess *session.Session) {
 	}
 
 	np.TextView.SetSensitive(true)
-	np.HeaderLabel.SetText("Заметки вкладки: " + sess.Title)
+	np.HeaderLabel.SetText("Заметки: " + sess.Title)
 	np.lastSavedText = sess.Notes
 	np.TextBuffer.SetText(sess.Notes)
 }
