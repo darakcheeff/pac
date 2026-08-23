@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"log"
+
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/ui/vte"
 	"github.com/gotk3/gotk3/gdk"
@@ -33,7 +35,7 @@ type TabItem struct {
 // TabView manages notebook tabs and splits
 type TabView struct {
 	Notebook         *gtk.Notebook
-	tabs             map[int]*TabItem
+	items            []*TabItem
 	OnTabChanged     func(sess *session.Session)
 	OnTabClosed      func(sess *session.Session)
 	OnSplitRequested func(sess *session.Session, vertical bool)
@@ -50,12 +52,12 @@ func NewTabView() (*TabView, error) {
 
 	tv := &TabView{
 		Notebook: nb,
-		tabs:     make(map[int]*TabItem),
+		items:    make([]*TabItem, 0),
 	}
 
 	nb.Connect("switch-page", func(_ *gtk.Notebook, page *gtk.Widget, pageNum uint) {
-		item, exists := tv.tabs[int(pageNum)]
-		if exists {
+		item := tv.GetCurrentTab()
+		if item != nil {
 			if item.Terminal != nil {
 				item.Terminal.GrabFocus()
 			}
@@ -117,7 +119,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		ContentBox: contentBox,
 		Search:     searchBar,
 	}
-	tv.tabs[pageNum] = item
+	tv.items = append(tv.items, item)
 
 	// Close tab button action
 	closeBtn.Connect("clicked", func() {
@@ -155,8 +157,11 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 // SplitActiveTab splits current tab into two terminals (horizontal or vertical)
 func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTerm *vte.Terminal, vertical bool) error {
 	if item == nil || item.ContentBox == nil {
+		log.Printf("[TAB] SplitActiveTab: item or ContentBox is nil")
 		return nil
 	}
+
+	log.Printf("[TAB] Splitting tab %q (vertical=%v)", item.Session.Title, vertical)
 
 	// Create paned container
 	orientation := gtk.ORIENTATION_HORIZONTAL
@@ -169,7 +174,7 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 		return err
 	}
 
-	// Remove term from contentBox
+	// Remove original term from contentBox
 	item.ContentBox.Remove(item.Terminal.Widget)
 
 	// Create SplitChild
@@ -183,7 +188,12 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 	// Pack original terminal in Pack1 and new terminal in Pack2
 	paned.Pack1(item.Terminal.Widget, true, false)
 	paned.Pack2(splitBox, true, false)
-	paned.SetPosition(400)
+
+	if vertical {
+		paned.SetPosition(400)
+	} else {
+		paned.SetPosition(250)
+	}
 
 	item.ContentBox.PackStart(paned, true, true, 0)
 	item.Paned = paned
@@ -249,10 +259,21 @@ func (tv *TabView) CloseSplit(item *TabItem) {
 
 // CloseTab closes tab and session
 func (tv *TabView) CloseTab(item *TabItem) {
+	if item == nil {
+		return
+	}
+
 	pageNum := tv.Notebook.PageNum(item.ContentBox)
 	if pageNum >= 0 {
 		tv.Notebook.RemovePage(pageNum)
-		delete(tv.tabs, pageNum)
+	}
+
+	// Remove from items slice
+	for i, it := range tv.items {
+		if it == item {
+			tv.items = append(tv.items[:i], tv.items[i+1:]...)
+			break
+		}
 	}
 
 	if item.SplitChild != nil && item.SplitChild.Session != nil {
@@ -264,13 +285,47 @@ func (tv *TabView) CloseTab(item *TabItem) {
 	}
 }
 
-// GetCurrentTab returns active TabItem
-func (tv *TabView) GetCurrentTab() *TabItem {
-	curPage := tv.Notebook.GetCurrentPage()
-	if curPage >= 0 {
-		return tv.tabs[curPage]
+// FindTabBySession finds TabItem containing the specified session
+func (tv *TabView) FindTabBySession(sess *session.Session) *TabItem {
+	if sess == nil {
+		return nil
+	}
+	for _, it := range tv.items {
+		if it.Session != nil && it.Session.ID == sess.ID {
+			return it
+		}
+		if it.SplitChild != nil && it.SplitChild.Session != nil && it.SplitChild.Session.ID == sess.ID {
+			return it
+		}
 	}
 	return nil
+}
+
+// GetCurrentTab returns active TabItem based on current notebook page
+func (tv *TabView) GetCurrentTab() *TabItem {
+	curPage := tv.Notebook.GetCurrentPage()
+	if curPage < 0 {
+		if len(tv.items) > 0 {
+			return tv.items[0]
+		}
+		return nil
+	}
+
+	for _, it := range tv.items {
+		if it.ContentBox != nil && tv.Notebook.PageNum(it.ContentBox) == curPage {
+			return it
+		}
+	}
+
+	if curPage < len(tv.items) {
+		return tv.items[curPage]
+	}
+	return nil
+}
+
+// GetAllTabs returns all active TabItems
+func (tv *TabView) GetAllTabs() []*TabItem {
+	return tv.items
 }
 
 func (tv *TabView) showRenameDialog(item *TabItem) {
