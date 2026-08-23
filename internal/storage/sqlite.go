@@ -18,13 +18,13 @@ type Store struct {
 	mu sync.RWMutex
 }
 
-// NewStore initializes SQLite database with foreign keys and WAL mode
+// NewStore initializes SQLite database with WAL mode
 func NewStore(dbPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", dbPath)
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
@@ -74,7 +74,7 @@ func (s *Store) initSchema() error {
 			name TEXT NOT NULL,
 			description TEXT,
 			protocol TEXT NOT NULL,
-			host TEXT NOT NULL,
+			host TEXT,
 			port INTEGER NOT NULL,
 			username TEXT,
 			auth_method TEXT,
@@ -101,14 +101,12 @@ func (s *Store) initSchema() error {
 			notes TEXT,
 			sort_order INTEGER DEFAULT 0,
 			created_at DATETIME,
-			updated_at DATETIME,
-			FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
+			updated_at DATETIME
 		);`,
 		`CREATE TABLE IF NOT EXISTS notes (
 			host_id TEXT PRIMARY KEY,
 			content TEXT NOT NULL,
-			updated_at DATETIME,
-			FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE
+			updated_at DATETIME
 		);`,
 		`CREATE TABLE IF NOT EXISTS saved_sessions (
 			id TEXT PRIMARY KEY,
@@ -354,6 +352,10 @@ func (s *Store) DeleteHost(id string) error {
 // --- Notes ---
 
 func (s *Store) GetNotes(hostID string) (string, error) {
+	return s.GetNote(hostID)
+}
+
+func (s *Store) GetNote(hostID string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -366,6 +368,10 @@ func (s *Store) GetNotes(hostID string) (string, error) {
 }
 
 func (s *Store) SaveNotes(hostID, content string) error {
+	return s.SaveNote(hostID, content)
+}
+
+func (s *Store) SaveNote(hostID, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
