@@ -535,11 +535,14 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	term, err := vte.NewTerminal()
 	if err != nil {
 		app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
+		log.Printf("[APP] ERROR creating VTE terminal: %v", err)
 		return
 	}
+
 	slaveFile, err := term.SetupNativePTY()
 	if err != nil {
 		app.StatusLabel.SetText("Ошибка инициализации PTY: " + err.Error())
+		log.Printf("[APP] ERROR initializing native PTY: %v", err)
 		return
 	}
 
@@ -548,6 +551,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	} else if app.settings.DefaultFont != "" {
 		term.SetFont(app.settings.DefaultFont)
 	}
+
 	if host.ColorScheme != "" {
 		term.ApplyColorScheme(host.ColorScheme)
 	} else if app.settings.DefaultColorScheme != "" {
@@ -637,9 +641,34 @@ func (app *AppWindow) RestoreSavedSessions() {
 			}
 		}
 
-		go func(savedSt storage.SavedSessionState, host *storage.Host) {
+		term, err := vte.NewTerminal()
+		if err != nil {
+			log.Printf("[RESTORE] ERROR creating VTE terminal: %v", err)
+			continue
+		}
+		slaveFile, err := term.SetupNativePTY()
+		if err != nil {
+			log.Printf("[RESTORE] ERROR initializing PTY: %v", err)
+			continue
+		}
+
+		if h.FontName != "" {
+			term.SetFont(h.FontName)
+		} else if app.settings.DefaultFont != "" {
+			term.SetFont(app.settings.DefaultFont)
+		}
+
+		if h.ColorScheme != "" {
+			term.ApplyColorScheme(h.ColorScheme)
+		} else if app.settings.DefaultColorScheme != "" {
+			term.ApplyColorScheme(app.settings.DefaultColorScheme)
+		}
+
+		bridge := pty.FromSlave(slaveFile)
+
+		go func(savedSt storage.SavedSessionState, host *storage.Host, vteTerm *vte.Terminal, ptyBr *pty.PTYBridge) {
 			log.Printf("[RESTORE] Starting restored session for: %s (HostID=%s, proto=%s)", savedSt.Title, host.ID, host.Protocol)
-			sess, err := session.StartSession(context.Background(), host, savedSt.Title, app.settings.DefaultLogsDir)
+			sess, err := session.StartSessionWithBridge(context.Background(), host, savedSt.Title, app.settings.DefaultLogsDir, ptyBr, nil)
 			glib.IdleAdd(func() {
 				restoredCount++
 				if restoredCount >= totalCount {
@@ -656,38 +685,19 @@ func (app *AppWindow) RestoreSavedSessions() {
 				sess.Notes = savedSt.Notes
 				app.manager.Register(sess)
 
-				term, err := vte.NewTerminal()
-				if err != nil {
-					log.Printf("[RESTORE] ERROR creating VTE for %s: %v", savedSt.Title, err)
-					sess.Close()
-					return
-				}
-
-				if host.FontName != "" {
-					term.SetFont(host.FontName)
-				}
-				if host.ColorScheme != "" {
-					term.ApplyColorScheme(host.ColorScheme)
-				}
-
 				// Propagate window resize to PTY and remote SSH
-				term.OnResize = func(rows, cols int) {
+				vteTerm.OnResize = func(rows, cols int) {
 					sess.Resize(rows, cols)
 				}
 
 				// Restore history dump into VTE
 				if savedSt.ScrollbackDump != "" {
 					header := session.FormatRestoredHistoryHeader(savedSt.SavedAt)
-					term.FeedText(savedSt.ScrollbackDump + header)
+					vteTerm.FeedText(savedSt.ScrollbackDump + header)
 					log.Printf("[RESTORE] Fed %d bytes of scrollback history into VTE for %s", len(savedSt.ScrollbackDump), savedSt.Title)
 				}
 
-				// Attach PTY
-				if sess.PTY != nil && sess.PTY.Master != nil {
-					_ = term.SetPTYFD(int(sess.PTY.Master.Fd()))
-				}
-
-				_, _ = app.TabView.AddTab(sess, term)
+				_, _ = app.TabView.AddTab(sess, vteTerm)
 				app.NotesPanel.LoadSessionNotes(sess)
 
 				if sess.SFTPClient != nil {
@@ -695,7 +705,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 				}
 				log.Printf("[RESTORE] Restored tab successfully added for: %s", savedSt.Title)
 			})
-		}(st, h)
+		}(st, h, term, bridge)
 	}
 }
 
