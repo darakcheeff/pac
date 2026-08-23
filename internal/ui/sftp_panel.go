@@ -42,7 +42,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	if err != nil {
 		return nil, err
 	}
-	box.SetSizeRequest(260, -1)
+	box.SetSizeRequest(10, -1)
 
 	// Top toolbar (Path + Action buttons)
 	topBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 2)

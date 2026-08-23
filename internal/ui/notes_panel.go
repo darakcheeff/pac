@@ -32,7 +32,7 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 	box.SetMarginEnd(6)
 	box.SetMarginTop(6)
 	box.SetMarginBottom(6)
-	box.SetSizeRequest(260, -1)
+	box.SetSizeRequest(10, -1)
 
 	// Header Bar
 	headerBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
