@@ -28,6 +28,13 @@ type PTYBridge struct {
 	closed bool
 }
 
+// FromSlave creates a PTYBridge wrapping a native slave file descriptor
+func FromSlave(slave *os.File) *PTYBridge {
+	return &PTYBridge{
+		Slave: slave,
+	}
+}
+
 // Open creates a new connected PTY master and slave pair in RAW mode
 func Open() (*PTYBridge, error) {
 	master, slave, err := pty.Open()
@@ -36,8 +43,6 @@ func Open() (*PTYBridge, error) {
 	}
 
 	// Crucial: Set Slave PTY to RAW mode (disable ICANON and ECHO)
-	// Without raw mode, kernel line discipline waits for '\n' before delivering prompt bytes to VTE,
-	// causing blocking read() in gtk_main!
 	termios, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
 	if err == nil {
 		termios.Iflag &^= (unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON)
@@ -50,7 +55,6 @@ func Open() (*PTYBridge, error) {
 		_ = unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, termios)
 	}
 
-	// Set Master FD to non-blocking so VTE IO channel never blocks the GTK event loop
 	_ = syscall.SetNonblock(int(master.Fd()), true)
 
 	return &PTYBridge{
@@ -64,16 +68,26 @@ func (p *PTYBridge) SetSize(ws Winsize) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed || p.Master == nil {
+	if p.closed {
 		return nil
 	}
 
-	return pty.Setsize(p.Master, &pty.Winsize{
-		Rows: ws.Rows,
-		Cols: ws.Cols,
-		X:    ws.X,
-		Y:    ws.Y,
-	})
+	if p.Master != nil {
+		return pty.Setsize(p.Master, &pty.Winsize{
+			Rows: ws.Rows,
+			Cols: ws.Cols,
+			X:    ws.X,
+			Y:    ws.Y,
+		})
+	} else if p.Slave != nil {
+		return pty.Setsize(p.Slave, &pty.Winsize{
+			Rows: ws.Rows,
+			Cols: ws.Cols,
+			X:    ws.X,
+			Y:    ws.Y,
+		})
+	}
+	return nil
 }
 
 // GetSize reads the current PTY window dimensions
@@ -81,11 +95,22 @@ func (p *PTYBridge) GetSize() (Winsize, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed || p.Master == nil {
+	if p.closed {
 		return Winsize{Rows: 24, Cols: 80}, nil
 	}
 
-	ws, err := pty.GetsizeFull(p.Master)
+	var f *os.File
+	if p.Master != nil {
+		f = p.Master
+	} else if p.Slave != nil {
+		f = p.Slave
+	}
+
+	if f == nil {
+		return Winsize{Rows: 24, Cols: 80}, nil
+	}
+
+	ws, err := pty.GetsizeFull(f)
 	if err != nil {
 		return Winsize{Rows: 24, Cols: 80}, err
 	}
@@ -103,17 +128,16 @@ func (p *PTYBridge) BridgeIO(stream io.ReadWriter) (<-chan error, <-chan error) 
 	errIn := make(chan error, 1)
 	errOut := make(chan error, 1)
 
-	// Stream (Remote) -> PTY Master (VTE)
-	go func() {
-		_, err := io.Copy(p.Master, stream)
-		errIn <- err
-	}()
-
-	// PTY Master (VTE) -> Stream (Remote)
-	go func() {
-		_, err := io.Copy(stream, p.Master)
-		errOut <- err
-	}()
+	if p.Master != nil {
+		go func() {
+			_, err := io.Copy(p.Master, stream)
+			errIn <- err
+		}()
+		go func() {
+			_, err := io.Copy(stream, p.Master)
+			errOut <- err
+		}()
+	}
 
 	return errIn, errOut
 }

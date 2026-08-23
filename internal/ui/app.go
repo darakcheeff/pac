@@ -474,8 +474,31 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 	log.Printf("[APP] Splitting tab %q for host %s (vertical=%v)", tab.Session.Title, targetHost.Name, vertical)
 	app.StatusLabel.SetText("Разделение экрана...")
 
+	term, err := vte.NewTerminal()
+	if err != nil {
+		app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
+		return
+	}
+	slaveFile, err := term.SetupNativePTY()
+	if err != nil {
+		app.StatusLabel.SetText("Ошибка инициализации PTY: " + err.Error())
+		return
+	}
+
+	if targetHost.FontName != "" {
+		term.SetFont(targetHost.FontName)
+	} else if app.settings.DefaultFont != "" {
+		term.SetFont(app.settings.DefaultFont)
+	}
+	if targetHost.ColorScheme != "" {
+		term.ApplyColorScheme(targetHost.ColorScheme)
+	} else if app.settings.DefaultColorScheme != "" {
+		term.ApplyColorScheme(app.settings.DefaultColorScheme)
+	}
+
+	bridge := pty.FromSlave(slaveFile)
 	go func() {
-		newSess, err := session.StartSession(context.Background(), targetHost, tab.Session.Title+" [сплит]", app.settings.DefaultLogsDir)
+		newSess, err := session.StartSessionWithBridge(context.Background(), targetHost, tab.Session.Title+" [сплит]", app.settings.DefaultLogsDir, bridge, nil)
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка создания сплита: " + err.Error())
@@ -484,30 +507,9 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			}
 			app.manager.Register(newSess)
 
-			term, err := vte.NewTerminal()
-			if err != nil {
-				log.Printf("[APP] ERROR creating split terminal: %v", err)
-				newSess.Close()
-				return
-			}
-			if targetHost.FontName != "" {
-				term.SetFont(targetHost.FontName)
-			} else if app.settings.DefaultFont != "" {
-				term.SetFont(app.settings.DefaultFont)
-			}
-			if targetHost.ColorScheme != "" {
-				term.ApplyColorScheme(targetHost.ColorScheme)
-			} else if app.settings.DefaultColorScheme != "" {
-				term.ApplyColorScheme(app.settings.DefaultColorScheme)
-			}
-
 			// Propagate window resize to PTY and remote SSH
 			term.OnResize = func(rows, cols int) {
 				newSess.Resize(rows, cols)
-			}
-
-			if newSess.PTY != nil && newSess.PTY.Master != nil {
-				_ = term.SetPTYFD(int(newSess.PTY.Master.Fd()))
 			}
 
 			err = app.TabView.SplitActiveTab(tab, newSess, term, vertical)
@@ -530,22 +532,46 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	log.Printf("[APP] ConnectToHost initiated for: %s (%s:%d, proto=%s)", host.Name, host.Host, host.Port, host.Protocol)
 	app.StatusLabel.SetText("Подключение к " + host.Host + "...")
 
+	term, err := vte.NewTerminal()
+	if err != nil {
+		app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
+		return
+	}
+	slaveFile, err := term.SetupNativePTY()
+	if err != nil {
+		app.StatusLabel.SetText("Ошибка инициализации PTY: " + err.Error())
+		return
+	}
+
+	if host.FontName != "" {
+		term.SetFont(host.FontName)
+	} else if app.settings.DefaultFont != "" {
+		term.SetFont(app.settings.DefaultFont)
+	}
+	if host.ColorScheme != "" {
+		term.ApplyColorScheme(host.ColorScheme)
+	} else if app.settings.DefaultColorScheme != "" {
+		term.ApplyColorScheme(app.settings.DefaultColorScheme)
+	}
+
+	bridge := pty.FromSlave(slaveFile)
+
 	go func() {
 		var jumpClient *cryptoSsh.Client
 		// Resolve Jump Host if specified
 		if host.ProxyJumpHost != "" {
 			log.Printf("[APP] ProxyJump configured: %s", host.ProxyJumpHost)
 			if jumpHost, err := app.store.GetHost(host.ProxyJumpHost); err == nil && jumpHost != nil {
-				bridge, bErr := pty.Open()
+				jBridge, bErr := pty.Open()
 				if bErr == nil {
-					if jSess, jErr := engineSSH.ConnectSSH(context.Background(), jumpHost, bridge, nil); jErr == nil {
+					if jSess, jErr := engineSSH.ConnectSSH(context.Background(), jumpHost, jBridge, nil); jErr == nil {
 						jumpClient = jSess.Client()
 					}
 				}
 			}
 		}
 
-		sess, err := session.StartSessionWithJump(context.Background(), host, host.Name, app.settings.DefaultLogsDir, jumpClient)
+		sess, err := session.StartSessionWithBridge(context.Background(), host, host.Name, app.settings.DefaultLogsDir, bridge, jumpClient)
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText("Ошибка подключения: " + err.Error())
@@ -555,35 +581,9 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 
 			app.manager.Register(sess)
 
-			term, err := vte.NewTerminal()
-			if err != nil {
-				app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
-				log.Printf("[APP] ERROR creating VTE terminal: %v", err)
-				sess.Close()
-				return
-			}
-
-			// Apply terminal settings
-			if host.FontName != "" {
-				term.SetFont(host.FontName)
-			} else if app.settings.DefaultFont != "" {
-				term.SetFont(app.settings.DefaultFont)
-			}
-
-			if host.ColorScheme != "" {
-				term.ApplyColorScheme(host.ColorScheme)
-			} else if app.settings.DefaultColorScheme != "" {
-				term.ApplyColorScheme(app.settings.DefaultColorScheme)
-			}
-
 			// Propagate window resize to PTY and remote SSH
 			term.OnResize = func(rows, cols int) {
 				sess.Resize(rows, cols)
-			}
-
-			// Attach PTY FD to VTE widget
-			if sess.PTY != nil && sess.PTY.Master != nil {
-				_ = term.SetPTYFD(int(sess.PTY.Master.Fd()))
 			}
 
 			// Add to notebook tab

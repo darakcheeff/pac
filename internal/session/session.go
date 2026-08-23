@@ -86,7 +86,11 @@ func StartSessionWithJump(ctx context.Context, host *storage.Host, title string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate pty: %w", err)
 	}
+	return StartSessionWithBridge(ctx, host, title, defaultLogsDir, bridge, jumpClient)
+}
 
+// StartSessionWithBridge connects to host using an existing PTYBridge (e.g. from VTE Native PTY)
+func StartSessionWithBridge(ctx context.Context, host *storage.Host, title string, defaultLogsDir string, bridge *pty.PTYBridge, jumpClient *cryptoSsh.Client) (*Session, error) {
 	logger, _ := NewSessionLogger(host, defaultLogsDir)
 
 	ctx, cancel := context.WithCancel(ctx)
