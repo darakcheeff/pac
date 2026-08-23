@@ -29,7 +29,7 @@ type AppWindow struct {
 	ToolBar      *gtk.Toolbar
 	MainPaned    *gtk.Paned
 	LeftPaned    *gtk.Paned
-	RightPaned   *gtk.Paned
+	CenterPaned  *gtk.Paned
 	HostTree     *HostTree
 	SFTPPanel    *SFTPPanel
 	TabView      *TabView
@@ -71,15 +71,18 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	toolBar.SetStyle(gtk.TOOLBAR_BOTH_HORIZ)
 	mainBox.PackStart(toolBar, false, false, 0)
 
-	// 3. Center Workspace Paneds
-	leftRightPaned, _ := gtk.PanedNew(gtk.ORIENTATION_HORIZONTAL)
-	leftRightPaned.SetWideHandle(true)
+	// 3. Center Workspace Paneds with clean independent docking
+	// mainPaned: [ centerPaned (Left Sidebar + Terminals) | notesPanel (Right Sidebar) ]
+	// centerPaned: [ leftPaned (Hosts + SFTP) | tabView.Notebook (Center Terminals) ]
+	// leftPaned: [ hostTree (Top) | sftpPanel (Bottom) ]
+	mainPaned, _ := gtk.PanedNew(gtk.ORIENTATION_HORIZONTAL)
+	mainPaned.SetWideHandle(true)
+
+	centerPaned, _ := gtk.PanedNew(gtk.ORIENTATION_HORIZONTAL)
+	centerPaned.SetWideHandle(true)
 
 	leftPaned, _ := gtk.PanedNew(gtk.ORIENTATION_VERTICAL)
 	leftPaned.SetWideHandle(true)
-
-	rightPaned, _ := gtk.PanedNew(gtk.ORIENTATION_HORIZONTAL)
-	rightPaned.SetWideHandle(true)
 
 	hostTree, _ := NewHostTree(store)
 	sftpPanel, _ := NewSFTPPanel(watcherMgr)
@@ -87,20 +90,24 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	notesPanel, _ := NewNotesPanel(store)
 	broadcastBar, _ := NewBroadcastBar(manager)
 
-	// Completely unrestricted sizing for all dividers: resize=true, shrink=true
+	// Left vertical split: Hosts (top) + SFTP (bottom)
 	leftPaned.Pack1(hostTree.Box, true, true)
 	leftPaned.Pack2(sftpPanel.Box, true, true)
 	leftPaned.SetPosition(250)
 
-	rightPaned.Pack1(tabView.Notebook, true, true)
-	rightPaned.Pack2(notesPanel.Box, true, true)
-	rightPaned.SetPosition(550)
+	// Center horizontal split: Left Sidebar + Center Terminals
+	// leftPaned doesn't expand on window resize; tabView takes all extra width
+	centerPaned.Pack1(leftPaned, false, true)
+	centerPaned.Pack2(tabView.Notebook, true, true)
+	centerPaned.SetPosition(240)
 
-	leftRightPaned.Pack1(leftPaned, true, true)
-	leftRightPaned.Pack2(rightPaned, true, true)
-	leftRightPaned.SetPosition(250)
+	// Main horizontal split: (Left Sidebar + Center Terminals) + Notes Panel (Right)
+	// centerPaned takes all window resize; notesPanel stays docked on right
+	mainPaned.Pack1(centerPaned, true, true)
+	mainPaned.Pack2(notesPanel.Box, false, true)
+	mainPaned.SetPosition(750)
 
-	mainBox.PackStart(leftRightPaned, true, true, 0)
+	mainBox.PackStart(mainPaned, true, true, 0)
 
 	// 4. Bottom Broadcast Bar (Hidden by default, won't show with ShowAll)
 	broadcastBar.Box.SetNoShowAll(true)
@@ -119,9 +126,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		MainBox:      mainBox,
 		MenuBar:      menuBar,
 		ToolBar:      toolBar,
-		MainPaned:    leftRightPaned,
+		MainPaned:    mainPaned,
 		LeftPaned:    leftPaned,
-		RightPaned:   rightPaned,
+		CenterPaned:  centerPaned,
 		HostTree:     hostTree,
 		SFTPPanel:    sftpPanel,
 		TabView:      tabView,

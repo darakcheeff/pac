@@ -7,6 +7,7 @@ import (
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/gotk3/gotk3/pango"
 )
 
 const (
@@ -57,6 +58,7 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 
 	col.PackStart(rPixbuf, false)
 	col.AddAttribute(rPixbuf, "icon-name", ColIcon)
+	_ = rText.SetProperty("ellipsize", pango.ELLIPSIZE_END)
 	col.PackStart(rText, true)
 	col.AddAttribute(rText, "text", ColName)
 

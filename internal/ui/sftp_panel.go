@@ -96,6 +96,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	rName, _ := gtk.CellRendererTextNew()
 	colName.PackStart(rPixbuf, false)
 	colName.AddAttribute(rPixbuf, "icon-name", SFTPColIcon)
+	_ = rName.SetProperty("ellipsize", pango.ELLIPSIZE_END)
 	colName.PackStart(rName, true)
 	colName.AddAttribute(rName, "text", SFTPColName)
 	treeView.AppendColumn(colName)
