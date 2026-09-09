@@ -15,12 +15,9 @@ const splitHorizontalSVG = `<?xml version="1.0" encoding="UTF-8"?>
 
 const splitVerticalSVG = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
-  <g transform="rotate(-90 10 10)">
-    <rect x="2" y="2" width="16" height="16" rx="2" fill="#eeeeec" stroke="#555753" stroke-width="1.8"/>
-    <line x1="2" y1="10" x2="18" y2="10" stroke="#555753" stroke-width="1.8"/>
-    <rect x="4" y="4.5" width="4" height="2" rx="0.5" fill="#4e9a06"/>
-    <rect x="4" y="12.5" width="4" height="2" rx="0.5" fill="#3465a4"/>
-  </g>
+  <rect x="2" y="2" width="16" height="16" rx="2" fill="#eeeeec" stroke="#555753" stroke-width="1.8"/>
+  <path d="M 10 2 L 16 2 A 2 2 0 0 1 18 4 L 18 16 A 2 2 0 0 1 16 18 L 10 18 Z" fill="#555753"/>
+  <line x1="10" y1="2" x2="10" y2="18" stroke="#555753" stroke-width="1.8"/>
 </svg>`
 
 const unsplitSVG = `<?xml version="1.0" encoding="UTF-8"?>
