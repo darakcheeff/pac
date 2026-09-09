@@ -342,7 +342,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 			return
 		}
 		app.TabView.UnsplitTab(tab)
-		app.StatusLabel.SetText(i18n.T("Панели успешно разгруппированы в отдельные вкладки", "Panes successfully unsplit into separate tabs"))
+		app.StatusLabel.SetText(i18n.T("Активная панель вынесена в отдельную вкладку", "Active pane detached into separate tab"))
 	})
 	app.ToolBar.Insert(btnUnsplit, -1)
 

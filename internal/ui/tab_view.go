@@ -572,75 +572,111 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 	return item, nil
 }
 
-// UnsplitTab moves all split panes except the first one into their own individual tabs
+// UnsplitTab detaches the currently active/focused split pane into its own individual tab
 func (tv *TabView) UnsplitTab(item *TabItem) {
 	if item == nil || len(item.Panes) <= 1 {
 		log.Printf("[TAB] UnsplitTab: item is nil or has <= 1 panes")
 		return
 	}
 
-	log.Printf("[TAB] Unsplitting tab %q (current panes=%d)", item.Session.Title, len(item.Panes))
-
-	primaryPane := item.Panes[0]
-	extraPanes := item.Panes[1:]
-	focusedPane := item.FocusedPane
-
-	// 1. Detach ALL panes from their current parent containers (Paned widgets)
-	for _, p := range item.Panes {
-		removeWidgetFromParent(p.Box)
+	pane := item.FocusedPane
+	if pane == nil {
+		pane = item.Panes[len(item.Panes)-1]
 	}
 
-	// 2. Clear contentBox of any remaining containers (the old Paned tree)
-	children := item.ContentBox.GetChildren()
-	if children != nil {
-		for l := children; l != nil; l = l.Next() {
-			if obj, ok := l.Data().(*glib.Object); ok {
-				w := &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: obj}}
-				item.ContentBox.Remove(w)
+	log.Printf("[TAB] Detaching active pane %q from tab %q (remaining panes: %d)", pane.Session.Title, item.Session.Title, len(item.Panes)-1)
+
+	parentObj, pErr := pane.Box.GetParent()
+	if pErr != nil || parentObj == nil {
+		log.Printf("[TAB] ERROR: cannot get parent of pane.Box: %v", pErr)
+		return
+	}
+
+	parentPaned := toPaned(parentObj)
+	c1, _ := parentPaned.GetChild1()
+	c2, _ := parentPaned.GetChild2()
+
+	var sibling gtk.IWidget
+	if c1 != nil && areWidgetsEqual(c1, pane.Box) {
+		sibling = c2
+	} else {
+		sibling = c1
+	}
+
+	grandParentObj, _ := parentPaned.GetParent()
+	parentPaned.Remove(pane.Box)
+	if sibling != nil {
+		parentPaned.Remove(sibling)
+	}
+
+	if grandParentObj != nil {
+		if areWidgetsEqual(grandParentObj, item.ContentBox) {
+			item.ContentBox.Remove(parentPaned)
+			if sibling != nil {
+				item.ContentBox.PackStart(sibling, true, true, 0)
+			}
+		} else {
+			grandPaned := toPaned(grandParentObj)
+			gc1, _ := grandPaned.GetChild1()
+			if gc1 != nil && areWidgetsEqual(gc1, parentPaned) {
+				grandPaned.Remove(parentPaned)
+				if sibling != nil {
+					grandPaned.Pack1(sibling, true, false)
+				}
+			} else {
+				grandPaned.Remove(parentPaned)
+				if sibling != nil {
+					grandPaned.Pack2(sibling, true, false)
+				}
 			}
 		}
 	}
 
-	// 3. Restore primary pane in original tab
-	item.Panes = []*TerminalPane{primaryPane}
-	item.FocusedPane = primaryPane
-	primaryPane.TabItem = item
-	primaryPane.SplitDirection = ""
-	primaryPane.ParentSessionID = ""
-	item.ContentBox.PackStart(primaryPane.Box, true, true, 0)
+	// Remove detached pane from item.Panes
+	newPanes := make([]*TerminalPane, 0, len(item.Panes)-1)
+	for _, p := range item.Panes {
+		if p != pane {
+			newPanes = append(newPanes, p)
+		}
+	}
+	item.Panes = newPanes
+
+	// If only 1 pane left in original tab, clear split markers
+	if len(item.Panes) == 1 {
+		item.Panes[0].SplitDirection = ""
+		item.Panes[0].ParentSessionID = ""
+	}
+
+	// Update focus and session of original tab
+	if len(item.Panes) > 0 {
+		item.FocusedPane = item.Panes[0]
+		if item.Session == pane.Session {
+			item.Session = item.Panes[0].Session
+			item.ID = item.Session.ID
+			if item.Label != nil {
+				item.Label.SetText(item.Session.Title)
+			}
+		}
+	}
+
 	item.ContentBox.ShowAll()
 
-	// 4. Open each extra pane as its own standalone tab
-	var targetTabToFocus *TabItem
-	for _, extra := range extraPanes {
-		newTab, err := tv.AddTabWithPane(extra)
-		if err != nil {
-			log.Printf("[TAB] ERROR adding tab for detached pane %q: %v", extra.Session.Title, err)
-		} else if extra == focusedPane {
-			targetTabToFocus = newTab
-		}
+	// Open detached pane as its own new tab
+	newTab, err := tv.AddTabWithPane(pane)
+	if err != nil {
+		log.Printf("[TAB] ERROR adding tab for detached pane %q: %v", pane.Session.Title, err)
+		return
 	}
 
-	// 5. Select active tab and focus terminal
-	if targetTabToFocus != nil {
-		pageNum := tv.Notebook.PageNum(targetTabToFocus.ContentBox)
-		if pageNum >= 0 {
-			tv.Notebook.SetCurrentPage(pageNum)
-		}
-		if focusedPane != nil && focusedPane.Terminal != nil {
-			focusedPane.Terminal.GrabFocus()
-		}
-	} else {
-		pageNum := tv.Notebook.PageNum(item.ContentBox)
-		if pageNum >= 0 {
-			tv.Notebook.SetCurrentPage(pageNum)
-		}
-		if primaryPane.Terminal != nil {
-			primaryPane.Terminal.GrabFocus()
-		}
+	pageNum := tv.Notebook.PageNum(newTab.ContentBox)
+	if pageNum >= 0 {
+		tv.Notebook.SetCurrentPage(pageNum)
+	}
+	if pane.Terminal != nil {
+		pane.Terminal.GrabFocus()
 	}
 
-	log.Printf("[TAB] Unsplit complete for %q, total tabs now=%d", item.Session.Title, len(tv.items))
+	log.Printf("[TAB] Pane %q detached into new tab successfully. Original tab %q now has %d pane(s).", pane.Session.Title, item.Session.Title, len(item.Panes))
 }
 
 // CloseTab closes entire tab and all underlying split sessions
@@ -1003,6 +1039,13 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	menu.Append(mSplitV)
 
 	if len(pane.TabItem.Panes) > 1 {
+		mDetach, _ := gtk.MenuItemNewWithLabel(i18n.T("Разгруппировать: вынести в новую вкладку (↔)", "Detach to new tab (↔)"))
+		mDetach.Connect("activate", func() {
+			pane.TabItem.FocusedPane = pane
+			tv.UnsplitTab(pane.TabItem)
+		})
+		menu.Append(mDetach)
+
 		mClosePane, _ := gtk.MenuItemNewWithLabel(i18n.T("Закрыть этот терминал", "Close this terminal"))
 		mClosePane.Connect("activate", func() {
 			tv.ClosePane(pane)
