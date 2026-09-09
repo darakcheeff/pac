@@ -19,6 +19,7 @@ type SerialSession struct {
 	cancel    context.CancelFunc
 	mu        sync.Mutex
 	closed    bool
+	OnExit    func(err error)
 }
 
 func ConnectSerial(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, outputWriter io.Writer) (*SerialSession, error) {
@@ -89,7 +90,14 @@ func ConnectSerial(ctx context.Context, host *storage.Host, bridge *pty.PTYBridg
 	}
 
 	go func() {
-		_, _ = io.Copy(destWriter, rwc)
+		_, copyErr := io.Copy(destWriter, rwc)
+		s.mu.Lock()
+		wasClosed := s.closed
+		s.mu.Unlock()
+		s.Close()
+		if !wasClosed && s.OnExit != nil {
+			s.OnExit(copyErr)
+		}
 	}()
 	go func() {
 		_, _ = io.Copy(rwc, bridge.Slave)

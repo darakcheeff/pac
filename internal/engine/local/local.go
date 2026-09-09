@@ -18,6 +18,7 @@ type LocalSession struct {
 	cancel    context.CancelFunc
 	mu        sync.Mutex
 	closed    bool
+	OnExit    func(err error)
 }
 
 func StartLocalShell(ctx context.Context, bridge *enginePty.PTYBridge) (*LocalSession, error) {
@@ -49,8 +50,14 @@ func StartLocalShell(ctx context.Context, bridge *enginePty.PTYBridge) (*LocalSe
 	go bridge.BridgeIO(ptmx)
 
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
+		s.mu.Lock()
+		wasClosed := s.closed
+		s.mu.Unlock()
 		s.Close()
+		if !wasClosed && s.OnExit != nil {
+			s.OnExit(waitErr)
+		}
 	}()
 
 	return s, nil

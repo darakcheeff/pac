@@ -29,6 +29,7 @@ type SSHSession struct {
 	closed            bool
 	keepAliveInterval time.Duration
 	keepAliveCountMax int
+	OnExit            func(err error)
 }
 
 // ConnectSSH establishes SSH connection based on host profile
@@ -204,6 +205,18 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		keepAliveInterval: keepAliveDur,
 		keepAliveCountMax: keepAliveMax,
 	}
+
+	// Monitor remote session exit
+	go func() {
+		waitErr := session.Wait()
+		s.mu.Lock()
+		wasClosed := s.closed
+		s.closed = true
+		s.mu.Unlock()
+		if !wasClosed && s.OnExit != nil {
+			s.OnExit(waitErr)
+		}
+	}()
 
 	// Start KeepAlive loop if interval > 0
 	if keepAliveDur > 0 {

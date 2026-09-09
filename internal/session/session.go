@@ -69,6 +69,8 @@ type Session struct {
 	SerialSession *serial.SerialSession
 	LocalSession  *local.LocalSession
 
+	OnExit func(err error)
+
 	// Ring buffer for scrollback history and global search
 	scrollback   []byte
 	scrollbackMu sync.RWMutex
@@ -148,6 +150,11 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			return nil, err
 		}
 		sess.SSHSession = sshSess
+		sshSess.OnExit = func(exitErr error) {
+			if sess.OnExit != nil {
+				sess.OnExit(exitErr)
+			}
+		}
 
 		// Auto SFTP subsystem
 		if host.AutoSFTP {
@@ -163,6 +170,11 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			return nil, err
 		}
 		sess.TelnetSession = tSess
+		tSess.OnExit = func(exitErr error) {
+			if sess.OnExit != nil {
+				sess.OnExit(exitErr)
+			}
+		}
 
 	case storage.ProtoSerial:
 		sSess, err := serial.ConnectSerial(ctx, host, bridge, sess.Splitter)
@@ -171,6 +183,11 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			return nil, err
 		}
 		sess.SerialSession = sSess
+		sSess.OnExit = func(exitErr error) {
+			if sess.OnExit != nil {
+				sess.OnExit(exitErr)
+			}
+		}
 
 	case storage.ProtoLocal:
 		lSess, err := local.StartLocalShell(ctx, bridge)
@@ -179,6 +196,11 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			return nil, err
 		}
 		sess.LocalSession = lSess
+		lSess.OnExit = func(exitErr error) {
+			if sess.OnExit != nil {
+				sess.OnExit(exitErr)
+			}
+		}
 	}
 
 	return sess, nil

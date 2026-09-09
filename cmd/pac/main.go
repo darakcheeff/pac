@@ -36,9 +36,12 @@ func main() {
 		log.Fatalf("Failed to create application window: %v", err)
 	}
 
-	// Trap termination signals (Ctrl+C, SIGTERM, SIGHUP) to save session state on exit
+	// Ignore SIGHUP so closing terminals or PTY disconnects do not kill PAC
+	signal.Ignore(syscall.SIGHUP)
+
+	// Trap termination signals (Ctrl+C, SIGTERM) to save session state on exit
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
 		glib.IdleAdd(func() {

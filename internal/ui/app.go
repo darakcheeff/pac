@@ -628,6 +628,8 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			if app.settings.AutoRestoreSessions {
 				app.SaveAllSessionState()
 			}
+
+			app.attachSessionExitHandler(newSess, term, targetHost, tab.Session.Title+i18n.T(" [сплит]", " [split]"))
 		})
 	}()
 }
@@ -667,17 +669,9 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 
 	go func() {
 		var jumpClient *cryptoSsh.Client
-		// Resolve Jump Host if specified
 		if host.ProxyJumpHost != "" {
 			log.Printf("[APP] ProxyJump configured: %s", host.ProxyJumpHost)
-			if jumpHost, err := app.store.GetHost(host.ProxyJumpHost); err == nil && jumpHost != nil {
-				jBridge, bErr := pty.Open()
-				if bErr == nil {
-					if jSess, jErr := engineSSH.ConnectSSH(context.Background(), jumpHost, jBridge, nil); jErr == nil {
-						jumpClient = jSess.Client()
-					}
-				}
-			}
+			jumpClient = app.resolveJumpClient(host)
 		}
 
 		sess, err := session.StartSessionWithBridge(context.Background(), host, host.Name, app.settings.DefaultLogsDir, bridge, jumpClient)
@@ -709,6 +703,8 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			if app.settings.AutoRestoreSessions {
 				app.SaveAllSessionState()
 			}
+
+			app.attachSessionExitHandler(sess, term, host, host.Name)
 		})
 	}()
 }
@@ -821,6 +817,8 @@ func (app *AppWindow) RestoreSavedSessions() {
 					app.SFTPPanel.AttachClient(hostCopy.ID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
 
+				app.attachSessionExitHandler(sess, term, hostCopy, savedState.Title)
+
 				restoredCount++
 				if restoredCount >= totalSessions {
 					app.restoreMu.Lock()
@@ -910,6 +908,7 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 
 			isVertical := st.SplitDirection == "vertical" || st.SplitDirection == "left-right"
 			_ = app.TabView.SplitActiveTab(tabItem, sess, term, isVertical)
+			app.attachSessionExitHandler(sess, term, h, st.Title)
 		})
 	}()
 }
@@ -989,4 +988,110 @@ func (app *AppWindow) Quit() {
 	log.Printf("[APP] Exiting GTK main loop.")
 	gtk.MainQuit()
 	os.Exit(0)
+}
+
+// resolveJumpClient creates an SSH client to the proxy jump host if configured
+func (app *AppWindow) resolveJumpClient(host *storage.Host) *cryptoSsh.Client {
+	if host.ProxyJumpHost == "" {
+		return nil
+	}
+	jumpHost, err := app.store.GetHost(host.ProxyJumpHost)
+	if err != nil || jumpHost == nil {
+		log.Printf("[APP] resolveJumpClient: jump host %s not found: %v", host.ProxyJumpHost, err)
+		return nil
+	}
+	jBridge, bErr := pty.Open()
+	if bErr != nil {
+		log.Printf("[APP] resolveJumpClient: failed to open PTY for jump host: %v", bErr)
+		return nil
+	}
+	jSess, jErr := engineSSH.ConnectSSH(context.Background(), jumpHost, jBridge, nil)
+	if jErr != nil {
+		log.Printf("[APP] resolveJumpClient: failed to connect to jump host %s: %v", host.ProxyJumpHost, jErr)
+		return nil
+	}
+	return jSess.Client()
+}
+
+// attachSessionExitHandler monitors session termination and prompts user to reconnect via Enter
+func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.Terminal, host *storage.Host, tabTitle string) {
+	if sess == nil || term == nil || host == nil {
+		return
+	}
+
+	sess.OnExit = func(exitErr error) {
+		glib.IdleAdd(func() {
+			if term.IsDisconnected() {
+				return
+			}
+			// Verify tab still exists
+			if app.TabView.FindTabBySession(sess) == nil {
+				return
+			}
+
+			// Show yellow disconnect prompt in terminal buffer
+			term.FeedText("\r\n\r\n\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
+			app.StatusLabel.SetText(i18n.Tf("Сессия %s закрыта", "Session %s closed", host.Name))
+
+			var reconnectFunc func()
+			reconnectFunc = func() {
+				term.SetDisconnected(false, nil)
+				term.FeedText("\r\n\x1b[1;36m" + i18n.T("[Переподключение...]", "[Reconnecting...]") + "\x1b[0m\r\n")
+				app.StatusLabel.SetText(i18n.Tf("Переподключение к %s...", "Reconnecting to %s...", host.Host))
+
+				slaveFile, err := term.SetupNativePTY()
+				if err != nil {
+					term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка инициализации PTY: ", "PTY initialization error: ") + err.Error() + "\x1b[0m\r\n")
+					term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
+					term.SetDisconnected(true, reconnectFunc)
+					return
+				}
+
+				bridge := pty.FromSlave(slaveFile)
+				go func() {
+					jumpClient := app.resolveJumpClient(host)
+					newSess, err := session.StartSessionWithBridge(context.Background(), host, tabTitle, app.settings.DefaultLogsDir, bridge, jumpClient)
+					glib.IdleAdd(func() {
+						if err != nil {
+							term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка подключения: ", "Connection error: ") + err.Error() + "\x1b[0m\r\n")
+							term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
+							term.SetDisconnected(true, reconnectFunc)
+							app.StatusLabel.SetText(i18n.T("Ошибка переподключения: ", "Reconnection error: ") + err.Error())
+							return
+						}
+
+						oldID := sess.ID
+						app.manager.Unregister(oldID)
+						app.manager.Register(newSess)
+
+						app.TabView.UpdateSessionForTerminal(term, newSess)
+
+						term.OnResize = func(rows, cols int) {
+							newSess.Resize(rows, cols)
+						}
+						rows := term.GetRowCount()
+						cols := term.GetColumnCount()
+						if rows > 0 && cols > 0 {
+							newSess.Resize(rows, cols)
+						}
+
+						if newSess.SFTPClient != nil {
+							app.SFTPPanel.AttachClient(host.ID, newSess.SFTPClient, app.settings.DefaultEditor)
+						}
+
+						app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
+						log.Printf("[APP] Reconnected session for: %s (new sessionID=%s)", host.Name, newSess.ID)
+
+						if app.settings.AutoRestoreSessions {
+							app.SaveAllSessionState()
+						}
+
+						app.attachSessionExitHandler(newSess, term, host, tabTitle)
+					})
+				}()
+			}
+
+			term.SetDisconnected(true, reconnectFunc)
+		})
+	}
 }

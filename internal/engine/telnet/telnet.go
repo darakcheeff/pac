@@ -34,6 +34,7 @@ type TelnetSession struct {
 	cancel    context.CancelFunc
 	mu        sync.Mutex
 	closed    bool
+	OnExit    func(err error)
 }
 
 func ConnectTelnet(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, jumpClient *cryptoSsh.Client) (*TelnetSession, error) {
@@ -86,7 +87,13 @@ func (s *TelnetSession) readLoop() {
 
 		n, err := s.conn.Read(buf)
 		if err != nil {
+			s.mu.Lock()
+			wasClosed := s.closed
+			s.mu.Unlock()
 			s.Close()
+			if !wasClosed && s.OnExit != nil {
+				s.OnExit(err)
+			}
 			return
 		}
 

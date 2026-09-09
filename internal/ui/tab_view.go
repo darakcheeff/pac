@@ -1071,3 +1071,21 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	menu.ShowAll()
 	menu.PopupAtPointer(nil)
 }
+
+// UpdateSessionForTerminal updates session reference in tab and panes for a terminal
+func (tv *TabView) UpdateSessionForTerminal(term *vte.Terminal, newSess *session.Session) {
+	for _, item := range tv.items {
+		for _, pane := range item.Panes {
+			if pane.Terminal == term {
+				pane.Session = newSess
+				if item.Session == nil || item.Panes[0] == pane {
+					item.Session = newSess
+				}
+				if item.FocusedPane == pane && tv.OnTabChanged != nil {
+					tv.OnTabChanged(newSess)
+				}
+				return
+			}
+		}
+	}
+}

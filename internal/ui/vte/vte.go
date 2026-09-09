@@ -2,8 +2,8 @@ package vte
 
 /*
 #cgo pkg-config: vte-2.91 gtk+-3.0 libpcre2-8
+#cgo CFLAGS: -D_GNU_SOURCE
 #define PCRE2_CODE_UNIT_WIDTH 8
-#define _XOPEN_SOURCE 600
 #include <stdlib.h>
 #include <fcntl.h>
 #include <string.h>
@@ -46,7 +46,13 @@ static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gp
     return FALSE;
 }
 
+extern int goOnVteKeyPress(GtkWidget* widget, guint keyval);
+
 static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
+    if (goOnVteKeyPress(widget, event->keyval)) {
+        return TRUE;
+    }
+
     // Pass all keys cleanly to VTE without client interception
     // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
     if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
@@ -183,6 +189,7 @@ import "C"
 import (
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 
 	"github.com/darakcheeff/pac/internal/engine/pty"
@@ -198,12 +205,74 @@ func init() {
 	}
 }
 
+var (
+	termRegistryMu sync.Mutex
+	termRegistry   = make(map[uintptr]*Terminal)
+)
+
+func registerTerminal(t *Terminal) {
+	termRegistryMu.Lock()
+	defer termRegistryMu.Unlock()
+	termRegistry[uintptr(unsafe.Pointer(t.vteWidget))] = t
+}
+
+func unregisterTerminal(t *Terminal) {
+	termRegistryMu.Lock()
+	defer termRegistryMu.Unlock()
+	delete(termRegistry, uintptr(unsafe.Pointer(t.vteWidget)))
+}
+
+//export goOnVteKeyPress
+func goOnVteKeyPress(widget *C.GtkWidget, keyval C.guint) C.int {
+	termRegistryMu.Lock()
+	t := termRegistry[uintptr(unsafe.Pointer(widget))]
+	termRegistryMu.Unlock()
+
+	if t == nil {
+		return 0
+	}
+
+	if t.IsDisconnected() {
+		if keyval == C.GDK_KEY_Return || keyval == C.GDK_KEY_KP_Enter {
+			t.mu.Lock()
+			handler := t.OnReconnect
+			t.mu.Unlock()
+			if handler != nil {
+				glib.IdleAdd(func() {
+					handler()
+				})
+			}
+		}
+		return 1
+	}
+
+	return 0
+}
+
 // Terminal wraps VteTerminal C widget
 type Terminal struct {
 	*gtk.Widget
-	vteWidget *C.GtkWidget
-	vteTerm   *C.VteTerminal
-	OnResize  func(rows, cols int)
+	vteWidget      *C.GtkWidget
+	vteTerm        *C.VteTerminal
+	OnResize       func(rows, cols int)
+	OnReconnect    func()
+	isDisconnected bool
+	mu             sync.Mutex
+}
+
+// SetDisconnected updates disconnected state and reconnect callback
+func (t *Terminal) SetDisconnected(disconnected bool, onReconnect func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.isDisconnected = disconnected
+	t.OnReconnect = onReconnect
+}
+
+// IsDisconnected returns true if terminal is currently waiting for reconnect
+func (t *Terminal) IsDisconnected() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.isDisconnected
 }
 
 // NewTerminal creates a new VTE Terminal widget matching mate-terminal specifications
@@ -237,6 +306,8 @@ func NewTerminal() (*Terminal, error) {
 		}
 	})
 
+	registerTerminal(term)
+
 	term.ApplyColorScheme("mate")
 	term.Widget.SetSizeRequest(10, 10)
 	return term, nil
@@ -263,10 +334,11 @@ func (t *Terminal) SetupNativePTY() (*os.File, error) {
 	}
 
 	slavePath := C.GoString(&slavePathBuf[0])
-	slaveFile, oErr := os.OpenFile(slavePath, os.O_RDWR, 0)
+	slaveFd, oErr := unix.Open(slavePath, unix.O_RDWR|unix.O_NOCTTY, 0)
 	if oErr != nil {
 		return nil, fmt.Errorf("failed to open PTY slave %s: %w", slavePath, oErr)
 	}
+	slaveFile := os.NewFile(uintptr(slaveFd), slavePath)
 
 	// Put slave into raw mode
 	termios, tErr := unix.IoctlGetTermios(int(slaveFile.Fd()), unix.TCGETS)
