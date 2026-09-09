@@ -157,6 +157,9 @@ func (s *Store) initSchema() error {
 	s.migrateColumn("hosts", "ssh_keepalive_interval", "INTEGER DEFAULT 15")
 	s.migrateColumn("hosts", "ssh_keepalive_count_max", "INTEGER DEFAULT 3")
 
+	// Fix legacy imported records where key_path was set but auth_method defaulted to password
+	_, _ = s.db.Exec("UPDATE hosts SET auth_method = 'key' WHERE (key_path IS NOT NULL AND key_path != '') AND (auth_method = 'password' OR auth_method = '' OR auth_method IS NULL)")
+
 	var count int
 	s.db.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 'root'").Scan(&count)
 	if count == 0 {
@@ -174,6 +177,18 @@ func (s *Store) migrateColumn(table, column, colType string) {
 }
 
 // --- Groups CRUD ---
+
+func (s *Store) GetGroup(id string) (*Group, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var g Group
+	row := s.db.QueryRow("SELECT id, COALESCE(parent_id, ''), name, COALESCE(icon, ''), sort_order, created_at, updated_at FROM groups WHERE id = ?", id)
+	if err := row.Scan(&g.ID, &g.ParentID, &g.Name, &g.Icon, &g.SortOrder, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
 
 func (s *Store) GetAllGroups() ([]Group, error) {
 	s.mu.RLock()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -424,22 +426,76 @@ func (app *AppWindow) setupSignals() {
 	}
 
 	app.HostTree.OnAddGroup = func(parentGroupID string) {
+		name, ok := promptFolderDialog(app.Window, i18n.T("Новая папка", "New Folder"), i18n.T("Новая папка", "New Folder"))
+		if !ok || name == "" {
+			return
+		}
 		g := &storage.Group{
 			ID:       fmt.Sprintf("grp-%d", time.Now().UnixNano()),
 			ParentID: parentGroupID,
-			Name:     i18n.T("Новая папка", "New Folder"),
+			Name:     name,
 			Icon:     "folder",
 		}
 		_ = app.store.SaveGroup(g)
 		app.HostTree.Reload()
 	}
 
-	app.HostTree.OnImportOld = func() {
-		n, err := migration.MigrateOldConfig(app.store, "")
-		if err == nil {
-			app.HostTree.Reload()
-			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий", "Successfully imported %d sessions", n))
+	app.HostTree.OnRenameGroup = func(groupID string) {
+		g, err := app.store.GetGroup(groupID)
+		if err != nil || g == nil {
+			return
 		}
+		name, ok := promptFolderDialog(app.Window, i18n.T("Переименовать папку", "Rename Folder"), g.Name)
+		if !ok || name == "" || name == g.Name {
+			return
+		}
+		g.Name = name
+		_ = app.store.SaveGroup(g)
+		app.HostTree.Reload()
+	}
+
+	app.HostTree.OnImportOld = func() {
+		configPath := migration.FindLegacyConfigPath()
+		if configPath == "" {
+			fc, err := gtk.FileChooserDialogNewWith2Buttons(
+				i18n.T("Выберите файл конфигурации Ásbrú / PAC", "Select Ásbrú / PAC configuration file"),
+				app.Window,
+				gtk.FILE_CHOOSER_ACTION_OPEN,
+				i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+				i18n.T("Открыть", "Open"), gtk.RESPONSE_ACCEPT,
+			)
+			if err == nil {
+				filter, _ := gtk.FileFilterNew()
+				filter.SetName(i18n.T("Конфигурации Ásbrú / PAC (*.conf, *.yml)", "Ásbrú / PAC Configs (*.conf, *.yml)"))
+				filter.AddPattern("*.conf")
+				filter.AddPattern("*.yml")
+				filter.AddPattern("*.yaml")
+				filter.AddPattern("pac.nfreeze")
+				fc.AddFilter(filter)
+
+				allFilter, _ := gtk.FileFilterNew()
+				allFilter.SetName(i18n.T("Все файлы (*.*)", "All files (*.*)"))
+				allFilter.AddPattern("*")
+				fc.AddFilter(allFilter)
+
+				if fc.Run() == gtk.RESPONSE_ACCEPT {
+					configPath = fc.GetFilename()
+				}
+				fc.Destroy()
+			}
+		}
+
+		if configPath == "" {
+			return
+		}
+
+		n, err := migration.MigrateOldConfig(app.store, configPath)
+		if err != nil {
+			app.StatusLabel.SetText(i18n.T("Ошибка импорта: ", "Import error: ") + err.Error())
+			return
+		}
+		app.HostTree.Reload()
+		app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий из %s", "Successfully imported %d sessions from %s", n, filepath.Base(configPath)))
 	}
 
 	app.TabView.OnTabChanged = func(sess *session.Session) {
@@ -1094,4 +1150,56 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 			term.SetDisconnected(true, reconnectFunc)
 		})
 	}
+}
+
+// promptFolderDialog shows a modal input dialog to specify or rename a folder
+func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, bool) {
+	dlg, err := gtk.DialogNew()
+	if err != nil {
+		return "", false
+	}
+	dlg.SetTitle(title)
+	dlg.SetModal(true)
+	dlg.SetDefaultSize(320, 110)
+	if parent != nil {
+		if pw, ok := parent.(*gtk.Window); ok {
+			dlg.SetTransientFor(pw)
+		}
+	}
+
+	contentArea, err := dlg.GetContentArea()
+	if err != nil {
+		dlg.Destroy()
+		return "", false
+	}
+	contentArea.SetSpacing(8)
+	contentArea.SetMarginStart(12)
+	contentArea.SetMarginEnd(12)
+	contentArea.SetMarginTop(12)
+	contentArea.SetMarginBottom(12)
+
+	lbl, _ := gtk.LabelNew(i18n.T("Имя папки:", "Folder name:"))
+	lbl.SetXAlign(0)
+	contentArea.Add(lbl)
+
+	entry, _ := gtk.EntryNew()
+	entry.SetText(defaultName)
+	entry.SetActivatesDefault(true)
+	contentArea.Add(entry)
+
+	_, _ = dlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	btnOk, _ := dlg.AddButton(i18n.T("Сохранить", "Save"), gtk.RESPONSE_OK)
+	btnOk.SetCanDefault(true)
+	dlg.SetDefault(btnOk)
+
+	dlg.ShowAll()
+	response := dlg.Run()
+	name, _ := entry.GetText()
+	name = strings.TrimSpace(name)
+	dlg.Destroy()
+
+	if response == gtk.RESPONSE_OK && name != "" {
+		return name, true
+	}
+	return "", false
 }

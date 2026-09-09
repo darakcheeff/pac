@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"sync"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,8 @@ type SFTPPanel struct {
 	watcherMgr    *watcher.RemoteEditManager
 	currentHostID string
 	editorPref    string
+	isLoading     bool
+	loadMu        sync.Mutex
 }
 
 func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
@@ -250,6 +253,10 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 
 // AttachClient attaches active SFTP client for a session
 func (sp *SFTPPanel) AttachClient(hostID string, client *sftp.Client, editorPref string) {
+	if sp.client == client && sp.currentHostID == hostID {
+		sp.editorPref = editorPref
+		return
+	}
 	sp.currentHostID = hostID
 	sp.client = client
 	sp.editorPref = editorPref
@@ -267,10 +274,22 @@ func (sp *SFTPPanel) LoadDirectory(path string) {
 		return
 	}
 
+	sp.loadMu.Lock()
+	if sp.isLoading {
+		sp.loadMu.Unlock()
+		return
+	}
+	sp.isLoading = true
+	sp.loadMu.Unlock()
+
 	sp.StatusLabel.SetText(i18n.T("Загрузка каталога...", "Loading directory..."))
 	go func() {
 		items, err := sp.client.ListDir(path)
 		glib.IdleAdd(func() {
+			sp.loadMu.Lock()
+			sp.isLoading = false
+			sp.loadMu.Unlock()
+
 			if err != nil {
 				sp.StatusLabel.SetText(i18n.T("Ошибка: ", "Error: ") + err.Error())
 				return
@@ -561,7 +580,7 @@ func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 	mDelete, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить (Delete)", "Delete (Delete)"))
 	mDelete.Connect("activate", func() {
 		dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO,
-			i18n.Tf("Вы уверены, что хотите удалить '%s'?", "Are you sure you want to delete '%s'?", nameStr))
+			"%s", i18n.Tf("Вы уверены, что хотите удалить '%s'?", "Are you sure you want to delete '%s'?", nameStr))
 		if dlg.Run() == gtk.RESPONSE_YES {
 			_ = sp.client.Remove(remotePath)
 			sp.LoadDirectory(sp.client.CurrentDir())

@@ -318,7 +318,13 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	comboAuthM.Append("keyboard-interactive", i18n.T("Интерактивный ввод в терминале", "Keyboard Interactive"))
 	curAuth := string(host.AuthMethod)
 	if curAuth == "" {
-		curAuth = "password"
+		if host.KeyPath != "" {
+			curAuth = "key"
+		} else {
+			curAuth = "password"
+		}
+	} else if curAuth == "password" && host.KeyPath != "" && host.Password == "" {
+		curAuth = "key"
 	}
 	comboAuthM.SetActiveID(curAuth)
 	gridNet.Attach(lblAuthM, 0, 10, 1, 1)

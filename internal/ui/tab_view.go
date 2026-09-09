@@ -167,10 +167,11 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	// Focus and click handling
 	term.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
+		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
 		}
-		if tv.OnTabChanged != nil {
+		if !wasFocused && tv.OnTabChanged != nil {
 			tv.OnTabChanged(sess)
 		}
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
@@ -181,10 +182,11 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	})
 
 	term.Widget.Connect("focus-in-event", func() {
+		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
 		}
-		if tv.OnTabChanged != nil {
+		if !wasFocused && tv.OnTabChanged != nil {
 			tv.OnTabChanged(sess)
 		}
 	})

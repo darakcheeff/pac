@@ -2,6 +2,8 @@ package ssh
 
 import (
 	"context"
+	"log"
+	"strings"
 	"errors"
 	"fmt"
 	"io"
@@ -51,17 +53,32 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 
 	// 2. Private Key
 	if host.KeyPath != "" {
-		keyBytes, err := os.ReadFile(host.KeyPath)
+		keyPath := host.KeyPath
+		if strings.HasSuffix(keyPath, ".pub") {
+			privCandidate := strings.TrimSuffix(keyPath, ".pub")
+			if _, err := os.Stat(privCandidate); err == nil {
+				keyPath = privCandidate
+			}
+		}
+		keyBytes, err := os.ReadFile(keyPath)
 		if err == nil {
 			var signer ssh.Signer
-			if host.KeyPass != "" {
-				signer, err = ssh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(host.KeyPass))
+			passphrase := host.KeyPass
+			if passphrase == "" && host.AuthMethod == storage.AuthKey && host.Password != "" {
+				passphrase = host.Password
+			}
+			if passphrase != "" {
+				signer, err = ssh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(passphrase))
 			} else {
 				signer, err = ssh.ParsePrivateKey(keyBytes)
 			}
 			if err == nil {
 				authMethods = append(authMethods, ssh.PublicKeys(signer))
+			} else {
+				log.Printf("[SSH] Failed to parse private key %s: %v", keyPath, err)
 			}
+		} else {
+			log.Printf("[SSH] Failed to read private key %s: %v", keyPath, err)
 		}
 	}
 

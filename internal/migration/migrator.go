@@ -58,23 +58,28 @@ func isPrintable(data []byte) bool {
 	return true
 }
 
+// FindLegacyConfigPath looks for standard legacy Ásbrú / PAC config files on disk
+func FindLegacyConfigPath() string {
+	home, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(home, ".config", "asbru", "asbru.conf"),
+		filepath.Join(home, ".config", "asbru", "asbru.yml"),
+		filepath.Join(home, ".pac", "asbru.yml"),
+		filepath.Join(home, ".pac", "pac.yml"),
+		filepath.Join(home, ".pac", "pac.nfreeze"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return ""
+}
+
 // MigrateOldConfig scans standard paths for asbru.conf / pac.yml and imports into store
 func MigrateOldConfig(store *storage.Store, configPath string) (int, error) {
 	if configPath == "" {
-		home, _ := os.UserHomeDir()
-		candidates := []string{
-			filepath.Join(home, ".config", "asbru", "asbru.conf"),
-			filepath.Join(home, ".config", "asbru", "asbru.yml"),
-			filepath.Join(home, ".pac", "asbru.yml"),
-			filepath.Join(home, ".pac", "pac.yml"),
-			filepath.Join(home, ".pac", "pac.nfreeze"),
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				configPath = c
-				break
-			}
-		}
+		configPath = FindLegacyConfigPath()
 	}
 
 	if configPath == "" {
@@ -91,6 +96,73 @@ func MigrateOldConfig(store *storage.Store, configPath string) (int, error) {
 	}
 
 	return importYAML(store, data)
+}
+
+func getString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+func getMapString(m map[string]string, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func resolveProtocol(method string) storage.Protocol {
+	switch strings.ToLower(method) {
+	case "telnet":
+		return storage.ProtoTelnet
+	case "serial", "cu":
+		return storage.ProtoSerial
+	case "local":
+		return storage.ProtoLocal
+	case "vnc":
+		return storage.ProtoVNC
+	case "rdp":
+		return storage.ProtoRDP
+	default:
+		return storage.ProtoSSH
+	}
+}
+
+func resolveAuth(authType, keyPath, pass, passphrase string) (storage.AuthMethod, string, string, string) {
+	// Clean key path if .pub was given and private key exists without .pub
+	if keyPath != "" && strings.HasSuffix(keyPath, ".pub") {
+		privCandidate := strings.TrimSuffix(keyPath, ".pub")
+		if _, err := os.Stat(privCandidate); err == nil {
+			keyPath = privCandidate
+		}
+	}
+
+	authMethod := storage.AuthPassword
+	authTypeLower := strings.ToLower(authType)
+
+	if authTypeLower == "publickey" || authTypeLower == "key" || authTypeLower == "pubkey" {
+		authMethod = storage.AuthKey
+	} else if authTypeLower == "agent" || authTypeLower == "ssh-agent" {
+		authMethod = storage.AuthAgent
+	} else if authTypeLower == "manual" || authTypeLower == "interactive" || authTypeLower == "keyboard-interactive" {
+		authMethod = storage.AuthKeyboard
+	} else if keyPath != "" && authTypeLower != "userpass" && authTypeLower != "password" {
+		authMethod = storage.AuthKey
+	}
+
+	keyPass := passphrase
+	if authMethod == storage.AuthKey && keyPass == "" && pass != "" {
+		keyPass = pass
+	}
+
+	return authMethod, keyPath, pass, keyPass
 }
 
 func importYAML(store *storage.Store, data []byte) (int, error) {
@@ -111,13 +183,16 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 			continue
 		}
 
-		title, _ := nodeMap["title"].(string)
+		title := getString(nodeMap, "title", "name")
 		if title == "" {
 			title = id
 		}
 
 		isFolder, _ := nodeMap["is_folder"].(bool)
-		parent, _ := nodeMap["parent"].(string)
+		if !isFolder {
+			isFolder, _ = nodeMap["is_group"].(bool)
+		}
+		parent := getString(nodeMap, "parent")
 		if parent == "__ROOT__" || parent == "0" || parent == "" {
 			parent = "root"
 		}
@@ -137,33 +212,24 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 		}
 
 		// Host
-		method, _ := nodeMap["method"].(string)
-		ip, _ := nodeMap["ip"].(string)
+		method := getString(nodeMap, "method", "protocol")
+		ip := getString(nodeMap, "ip", "host", "hostname")
 		portVal := getInt(nodeMap["port"], 22)
-		user, _ := nodeMap["user"].(string)
-		passRaw, _ := nodeMap["pass"].(string)
-		if passRaw == "" {
-			passRaw, _ = nodeMap["password"].(string)
-		}
+		user := getString(nodeMap, "user", "username")
+
+		passRaw := getString(nodeMap, "pass", "password", "pwd")
 		pass := DecodePACPassword(passRaw)
 
-		key, _ := nodeMap["auth_key"].(string)
-		desc, _ := nodeMap["description"].(string)
-		notes, _ := nodeMap["notes"].(string)
+		passphraseRaw := getString(nodeMap, "passphrase", "key_passphrase", "passphrase user")
+		passphrase := DecodePACPassword(passphraseRaw)
 
-		proto := storage.ProtoSSH
-		switch strings.ToLower(method) {
-		case "telnet":
-			proto = storage.ProtoTelnet
-		case "serial", "cu":
-			proto = storage.ProtoSerial
-		case "local":
-			proto = storage.ProtoLocal
-		case "vnc":
-			proto = storage.ProtoVNC
-		case "rdp":
-			proto = storage.ProtoRDP
-		}
+		rawKeyPath := getString(nodeMap, "public key", "public_key", "auth_key", "key", "key_path", "identity_file", "identity")
+		rawAuthType := getString(nodeMap, "auth type", "auth_type", "auth", "authentication")
+		desc := getString(nodeMap, "description", "desc")
+		notes := getString(nodeMap, "notes", "comments")
+
+		proto := resolveProtocol(method)
+		authMethod, keyPath, finalPass, finalKeyPass := resolveAuth(rawAuthType, rawKeyPath, pass, passphrase)
 
 		host := &storage.Host{
 			ID:              id,
@@ -174,9 +240,10 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 			Host:            ip,
 			Port:            portVal,
 			Username:        user,
-			AuthMethod:      storage.AuthPassword,
-			Password:        pass,
-			KeyPath:         key,
+			AuthMethod:      authMethod,
+			Password:        finalPass,
+			KeyPath:         keyPath,
+			KeyPass:         finalKeyPass,
 			AutoSFTP:        true,
 			TerminalType:    "xterm-256color",
 			ScrollbackLines: 10000,
@@ -185,10 +252,6 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 			Notes:           notes,
 			CreatedAt:       time.Now(),
 			UpdatedAt:       time.Now(),
-		}
-
-		if key != "" && pass == "" {
-			host.AuthMethod = storage.AuthKey
 		}
 
 		if err := store.SaveHost(host); err == nil {
@@ -207,18 +270,19 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 	var currentData = make(map[string]string)
 
 	nodeRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*\{`)
-	kvRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*'([^']*)'`)
+	kvSingleRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*'((?:\\'|[^'])*)'`)
+	kvDoubleRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*"((?:\\"|[^"])*)"`)
 	kvNumRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*([0-9]+)`)
 
 	flushNode := func() {
 		if currentID == "" || len(currentData) == 0 {
 			return
 		}
-		title := currentData["title"]
+		title := getMapString(currentData, "title", "name")
 		if title == "" {
 			title = currentID
 		}
-		parent := currentData["parent"]
+		parent := getMapString(currentData, "parent")
 		if parent == "__ROOT__" || parent == "0" || parent == "" {
 			parent = "root"
 		}
@@ -239,35 +303,41 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 				port = 22
 			}
 
-			rawPass := currentData["pass"]
-			if rawPass == "" {
-				rawPass = currentData["password"]
-			}
+			method := getMapString(currentData, "method", "protocol")
+			proto := resolveProtocol(method)
+
+			rawPass := getMapString(currentData, "pass", "password", "pwd")
 			pass := DecodePACPassword(rawPass)
+
+			rawPassphrase := getMapString(currentData, "passphrase", "key_passphrase", "passphrase user")
+			passphrase := DecodePACPassword(rawPassphrase)
+
+			rawKeyPath := getMapString(currentData, "public key", "public_key", "auth_key", "key", "key_path", "identity_file", "identity")
+			rawAuthType := getMapString(currentData, "auth type", "auth_type", "auth", "authentication")
+
+			authMethod, keyPath, finalPass, finalKeyPass := resolveAuth(rawAuthType, rawKeyPath, pass, passphrase)
 
 			host := &storage.Host{
 				ID:              currentID,
 				GroupID:         parent,
 				Name:            title,
-				Description:     currentData["description"],
-				Protocol:        storage.ProtoSSH,
-				Host:            currentData["ip"],
+				Description:     getMapString(currentData, "description", "desc"),
+				Protocol:        proto,
+				Host:            getMapString(currentData, "ip", "host", "hostname"),
 				Port:            port,
-				Username:        currentData["user"],
-				AuthMethod:      storage.AuthPassword,
-				Password:        pass,
-				KeyPath:         currentData["auth_key"],
+				Username:        getMapString(currentData, "user", "username"),
+				AuthMethod:      authMethod,
+				Password:        finalPass,
+				KeyPath:         keyPath,
+				KeyPass:         finalKeyPass,
 				AutoSFTP:        true,
 				TerminalType:    "xterm-256color",
 				ScrollbackLines: 10000,
 				LogCleanANSI:    true,
 				RestoreHistory:  true,
-				Notes:           currentData["notes"],
+				Notes:           getMapString(currentData, "notes", "comments"),
 				CreatedAt:       time.Now(),
 				UpdatedAt:       time.Now(),
-			}
-			if host.KeyPath != "" && pass == "" {
-				host.AuthMethod = storage.AuthKey
 			}
 			if err := store.SaveHost(host); err == nil {
 				count++
@@ -284,8 +354,12 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 			currentID = matches[1]
 			continue
 		}
-		if matches := kvRegex.FindStringSubmatch(line); len(matches) > 2 {
-			currentData[matches[1]] = matches[2]
+		if matches := kvSingleRegex.FindStringSubmatch(line); len(matches) > 2 {
+			val := strings.ReplaceAll(matches[2], string([]byte{92, 39}), string([]byte{39}))
+			currentData[matches[1]] = val
+		} else if matches := kvDoubleRegex.FindStringSubmatch(line); len(matches) > 2 {
+			val := strings.ReplaceAll(matches[2], string([]byte{92, 34}), string([]byte{34}))
+			currentData[matches[1]] = val
 		} else if matches := kvNumRegex.FindStringSubmatch(line); len(matches) > 2 {
 			currentData[matches[1]] = matches[2]
 		}

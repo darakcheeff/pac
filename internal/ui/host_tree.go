@@ -30,6 +30,7 @@ type HostTree struct {
 	OnDeleteHost  func(hostID string)
 	OnAddHost     func(parentGroupID string)
 	OnAddGroup    func(parentGroupID string)
+	OnRenameGroup func(groupID string)
 	OnImportOld   func()
 }
 
@@ -256,7 +257,11 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		})
 		menu.Append(mAddHost)
 
-		mAddGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Создать подпапку", "Create Subfolder"))
+		groupLabel := i18n.T("Создать подпапку", "Create Subfolder")
+		if idStr == "root" {
+			groupLabel = i18n.T("Создать папку", "Create Folder")
+		}
+		mAddGroup, _ := gtk.MenuItemNewWithLabel(groupLabel)
 		mAddGroup.Connect("activate", func() {
 			if ht.OnAddGroup != nil {
 				ht.OnAddGroup(idStr)
@@ -278,6 +283,14 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		if idStr != "root" {
 			sep, _ := gtk.SeparatorMenuItemNew()
 			menu.Append(sep)
+
+			mRenameGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать папку", "Rename Folder"))
+			mRenameGroup.Connect("activate", func() {
+			if ht.OnRenameGroup != nil {
+				ht.OnRenameGroup(idStr)
+			}
+			})
+			menu.Append(mRenameGroup)
 
 			mDelGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить папку", "Delete Folder"))
 			mDelGroup.Connect("activate", func() {
