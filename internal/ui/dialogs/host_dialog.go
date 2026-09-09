@@ -700,8 +700,19 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		entryWorkDir.SetVisible(isLocal)
 		btnBrowseWorkDir.SetVisible(isLocal)
 
-		// Tunnels tab visibility (SSH only)
-		gridJump.SetVisible(proto == "ssh")
+		// Tunnels and Jump tab visibility (SSH & Telnet)
+		hasJump := proto == "ssh" || proto == "telnet"
+		gridJump.SetVisible(hasJump)
+		isSSH := proto == "ssh"
+		lblSelectJump.SetVisible(hasJump)
+		comboJumpHosts.SetVisible(hasJump)
+		chkX11.SetVisible(isSSH)
+		chkSFTP.SetVisible(isSSH)
+		lblKeepAlive.SetVisible(isSSH)
+		spinKeepAlive.SetVisible(isSSH)
+		sepFwd.SetVisible(isSSH)
+		lblFwdHeader.SetVisible(isSSH)
+		fwdContainer.SetVisible(isSSH)
 
 		// Dynamic authentication fields on "Основное"
 		if proto != "ssh" && proto != "telnet" {

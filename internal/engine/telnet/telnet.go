@@ -10,6 +10,7 @@ import (
 
 	"github.com/darakcheeff/pac/internal/engine/pty"
 	"github.com/darakcheeff/pac/internal/storage"
+	cryptoSsh "golang.org/x/crypto/ssh"
 )
 
 // Telnet Protocol Constants (RFC 854)
@@ -35,16 +36,27 @@ type TelnetSession struct {
 	closed    bool
 }
 
-func ConnectTelnet(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge) (*TelnetSession, error) {
+func ConnectTelnet(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, jumpClient *cryptoSsh.Client) (*TelnetSession, error) {
 	port := host.Port
 	if port == 0 {
 		port = 23
 	}
 
-	d := net.Dialer{Timeout: 10 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host.Host, port))
-	if err != nil {
-		return nil, fmt.Errorf("telnet connection failed: %w", err)
+	targetAddr := fmt.Sprintf("%s:%d", host.Host, port)
+	var conn net.Conn
+	var err error
+
+	if jumpClient != nil {
+		conn, err = jumpClient.DialContext(ctx, "tcp", targetAddr)
+		if err != nil {
+			return nil, fmt.Errorf("telnet over jump host failed: %w", err)
+		}
+	} else {
+		d := net.Dialer{Timeout: 10 * time.Second}
+		conn, err = d.DialContext(ctx, "tcp", targetAddr)
+		if err != nil {
+			return nil, fmt.Errorf("telnet connection failed: %w", err)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

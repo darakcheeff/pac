@@ -157,7 +157,7 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		}
 
 	case storage.ProtoTelnet:
-		tSess, err := telnet.ConnectTelnet(ctx, host, bridge)
+		tSess, err := telnet.ConnectTelnet(ctx, host, bridge, jumpClient)
 		if err != nil {
 			bridge.Close()
 			return nil, err
