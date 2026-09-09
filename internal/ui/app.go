@@ -17,6 +17,7 @@ import (
 	"github.com/darakcheeff/pac/internal/ui/dialogs"
 	"github.com/darakcheeff/pac/internal/ui/vte"
 	"github.com/gotk3/gotk3/glib"
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/gtk"
 	cryptoSsh "golang.org/x/crypto/ssh"
 )
@@ -46,6 +47,74 @@ type AppWindow struct {
 	restoreMu   sync.Mutex
 }
 
+
+const compactCSS = `
+toolbar {
+	padding: 1px 2px;
+	min-height: 28px;
+}
+toolbar button {
+	padding: 2px 4px;
+	margin: 0 1px;
+	min-height: 24px;
+	min-width: 24px;
+}
+notebook tab {
+	padding: 2px 6px;
+	min-height: 24px;
+	font-size: 11px;
+}
+notebook tab button {
+	padding: 0;
+	min-height: 16px;
+	min-width: 16px;
+}
+treeview {
+	font-size: 11px;
+}
+treeview.view {
+	min-height: 20px;
+}
+statusbar {
+	padding: 0 4px;
+	min-height: 20px;
+	font-size: 11px;
+}
+menubar {
+	padding: 0;
+	min-height: 22px;
+}
+menubar > menuitem {
+	padding: 2px 6px;
+	font-size: 11px;
+}
+paned > separator {
+	min-width: 3px;
+	min-height: 3px;
+	background-color: rgba(0, 0, 0, 0.12);
+}
+entry {
+	min-height: 24px;
+	padding: 2px 4px;
+	font-size: 11px;
+}
+button {
+	min-height: 24px;
+	padding: 2px 6px;
+}
+`
+
+func applyCompactTheme() {
+	cssProvider, err := gtk.CssProviderNew()
+	if err == nil {
+		_ = cssProvider.LoadFromData(compactCSS)
+		screen, err := gdk.ScreenGetDefault()
+		if err == nil && screen != nil {
+			gtk.AddProviderForScreen(screen, cssProvider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+		}
+	}
+}
+
 func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	win, err := gtk.WindowNew(gtk.WINDOW_TOPLEVEL)
 	if err != nil {
@@ -53,6 +122,22 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	}
 	win.SetTitle("PAC Connection Manager NextGen")
 	win.SetDefaultSize(1200, 750)
+	applyCompactTheme()
+
+	// Connect OSC 52 terminal clipboard sequences to system clipboard
+	session.GlobalClipboardHandler = func(target, text string) {
+		glib.IdleAdd(func() {
+			clip, err := gtk.ClipboardGet(gdk.SELECTION_CLIPBOARD)
+			if err == nil && clip != nil {
+				clip.SetText(text)
+			}
+			primary, err := gtk.ClipboardGet(gdk.SELECTION_PRIMARY)
+			if err == nil && primary != nil {
+				primary.SetText(text)
+			}
+		})
+	}
+
 	win.SetPosition(gtk.WIN_POS_CENTER)
 
 	watcherMgr, _ := watcher.NewRemoteEditManager()
@@ -68,7 +153,8 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	// 2. ToolBar
 	toolBar, _ := gtk.ToolbarNew()
-	toolBar.SetStyle(gtk.TOOLBAR_BOTH_HORIZ)
+	toolBar.SetStyle(gtk.TOOLBAR_ICONS)
+	toolBar.SetIconSize(gtk.ICON_SIZE_SMALL_TOOLBAR)
 	mainBox.PackStart(toolBar, false, false, 0)
 
 	// 3. Center Workspace Paneds with clean independent docking
@@ -106,6 +192,10 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	mainPaned.Pack1(centerPaned, true, true)
 	mainPaned.Pack2(notesPanel.Box, false, true)
 	mainPaned.SetPosition(750)
+
+	// Notes panel hidden by default to maximize terminal space
+	notesPanel.Box.SetNoShowAll(true)
+	notesPanel.Box.Hide()
 
 	mainBox.PackStart(mainPaned, true, true, 0)
 
@@ -249,16 +339,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	viewMenu, _ := gtk.MenuNew()
 	mView.SetSubmenu(viewMenu)
 
-	mToggleNotes, _ := gtk.CheckMenuItemNewWithLabel("Панель заметок")
-	mToggleNotes.SetActive(true)
-	mToggleNotes.Connect("toggled", func() {
-		if mToggleNotes.GetActive() {
-			app.NotesPanel.Box.Show()
-		} else {
-			app.NotesPanel.Box.Hide()
-		}
-	})
-	viewMenu.Append(mToggleNotes)
+
 
 	mToggleSFTP, _ := gtk.CheckMenuItemNewWithLabel("SFTP файловый менеджер")
 	mToggleSFTP.SetActive(true)
@@ -281,6 +362,12 @@ func (app *AppWindow) setupMenuAndToolbar() {
 		}
 	})
 	viewMenu.Append(mToggleBroadcast)
+
+	mToggleNotes, _ := gtk.MenuItemNewWithLabel("Панель заметок (Ctrl+Shift+N)")
+	mToggleNotes.Connect("activate", func() {
+		app.ToggleNotesPanel()
+	})
+	viewMenu.Append(mToggleNotes)
 
 	app.MenuBar.Append(mView)
 
@@ -399,6 +486,37 @@ func (app *AppWindow) setupMenuAndToolbar() {
 		ShowGlobalSearchDialog(app.Window, app.manager, nil)
 	})
 	app.ToolBar.Insert(btnSearch, -1)
+
+	// 7. Toggle Notes Panel
+	btnNotes, _ := gtk.ToolButtonNew(nil, "Заметки")
+	btnNotes.SetIconName("x-office-document-symbolic")
+	btnNotes.SetTooltipText("Показать / скрыть панель заметок (Ctrl+Shift+N)")
+	btnNotes.Connect("clicked", func() {
+		app.ToggleNotesPanel()
+	})
+	app.ToolBar.Insert(btnNotes, -1)
+}
+
+
+// ToggleNotesPanel toggles visibility of the right-hand notes panel without losing state
+func (app *AppWindow) ToggleNotesPanel() {
+	if app.NotesPanel.Box.IsVisible() {
+		app.NotesPanel.Box.Hide()
+	} else {
+		app.NotesPanel.Box.ShowAll()
+		w := app.MainPaned.GetAllocatedWidth()
+		if w > 400 {
+			app.MainPaned.SetPosition(w - 250)
+		}
+		curTab := app.TabView.GetCurrentTab()
+		if curTab != nil {
+			sess := curTab.Session
+			if curTab.FocusedPane != nil && curTab.FocusedPane.Session != nil {
+				sess = curTab.FocusedPane.Session
+			}
+			app.NotesPanel.LoadSessionNotes(sess)
+		}
+	}
 }
 
 func (app *AppWindow) setupSignals() {
@@ -454,6 +572,91 @@ func (app *AppWindow) setupSignals() {
 	app.TabView.OnSplitRequested = func(sess *session.Session, vertical bool) {
 		app.handleSplit(sess, vertical)
 	}
+
+	app.TabView.OnDuplicateRequested = func(sess *session.Session) {
+		if sess != nil && sess.Host != nil {
+			app.ConnectToHost(sess.Host)
+		}
+	}
+
+	app.TabView.OnReconnectRequested = func(sess *session.Session) {
+		if sess != nil && sess.Host != nil {
+			tab := app.TabView.FindTabBySession(sess)
+			if tab != nil {
+				app.TabView.CloseTab(tab)
+			}
+			app.ConnectToHost(sess.Host)
+		}
+	}
+
+	app.TabView.OnToggleNotesRequested = func() {
+		app.ToggleNotesPanel()
+	}
+
+	app.TabView.OnFindRequested = func(item *TabItem) {
+		if item != nil && item.FocusedPane != nil && item.FocusedPane.Search != nil {
+			item.FocusedPane.Search.Show()
+		}
+	}
+
+	app.TabView.OnEditHostRequested = func(host *storage.Host) {
+		if host != nil {
+			dialogs.ShowHostEditorDialog(app.Window, app.store, host, host.GroupID, func(h *storage.Host) {
+				app.HostTree.Reload()
+			})
+		}
+	}
+
+	app.TabView.OnSaveLogRequested = func(sess *session.Session) {
+		if sess == nil {
+			return
+		}
+		dlg, err := gtk.FileChooserDialogNewWith2Buttons(
+			"Сохранить журнал сессии",
+			app.Window,
+			gtk.FILE_CHOOSER_ACTION_SAVE,
+			"Отмена", gtk.RESPONSE_CANCEL,
+			"Сохранить", gtk.RESPONSE_ACCEPT,
+		)
+		if err != nil {
+			return
+		}
+		defer dlg.Destroy()
+		dlg.SetCurrentName(fmt.Sprintf("%s_%s.log", sess.Title, time.Now().Format("20060102_150405")))
+		if dlg.Run() == gtk.RESPONSE_ACCEPT {
+			filename := dlg.GetFilename()
+			_ = os.WriteFile(filename, []byte(sess.GetScrollbackText()), 0644)
+			app.StatusLabel.SetText("Журнал сохранен: " + filename)
+		}
+	}
+
+	app.TabView.OnNewConnection = func() {
+		dialogs.ShowQuickConnectDialog(app.Window, func(h *storage.Host) {
+			app.ConnectToHost(h)
+		})
+	}
+
+	app.TabView.OnClusterAdmin = func() {
+		if app.BroadcastBar.Box.IsVisible() {
+			app.BroadcastBar.Box.Hide()
+		} else {
+			app.BroadcastBar.Box.Show()
+			app.BroadcastBar.Entry.GrabFocus()
+		}
+	}
+
+	// Keyboard shortcut: Ctrl+Shift+N to toggle Notes panel
+	app.Window.Connect("key-press-event", func(_ *gtk.Window, event *gdk.Event) bool {
+		keyEvent := gdk.EventKeyNewFromEvent(event)
+		state := keyEvent.State()
+		if (state&uint(gdk.CONTROL_MASK) != 0) && (state&uint(gdk.SHIFT_MASK) != 0) {
+			if keyEvent.KeyVal() == gdk.KEY_N || keyEvent.KeyVal() == gdk.KEY_n {
+				app.ToggleNotesPanel()
+				return true
+			}
+		}
+		return false
+	})
 
 	app.Window.Connect("delete-event", func() bool {
 		app.Quit()

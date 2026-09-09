@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/darakcheeff/pac/internal/session"
+	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/darakcheeff/pac/internal/ui/vte"
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
@@ -60,11 +62,19 @@ type TabItem struct {
 
 // TabView manages notebook tabs and terminal splits
 type TabView struct {
-	Notebook         *gtk.Notebook
-	items            []*TabItem
-	OnTabChanged     func(sess *session.Session)
-	OnTabClosed      func(sess *session.Session)
-	OnSplitRequested func(sess *session.Session, vertical bool)
+	Notebook               *gtk.Notebook
+	items                  []*TabItem
+	OnTabChanged           func(sess *session.Session)
+	OnTabClosed            func(sess *session.Session)
+	OnSplitRequested       func(sess *session.Session, vertical bool)
+	OnDuplicateRequested   func(sess *session.Session)
+	OnReconnectRequested   func(sess *session.Session)
+	OnToggleNotesRequested func()
+	OnFindRequested        func(item *TabItem)
+	OnEditHostRequested    func(host *storage.Host)
+	OnSaveLogRequested     func(sess *session.Session)
+	OnNewConnection        func()
+	OnClusterAdmin         func()
 }
 
 // NewTabView initializes the GTK Notebook tab manager
@@ -455,6 +465,38 @@ func (tv *TabView) CloseTab(item *TabItem) {
 	tv.items = newItems
 }
 
+// CloseOtherTabs closes all tabs except the specified one
+func (tv *TabView) CloseOtherTabs(keepItem *TabItem) {
+	for _, it := range append([]*TabItem(nil), tv.items...) {
+		if it != keepItem {
+			tv.CloseTab(it)
+		}
+	}
+}
+
+// CloseTabsToRight closes all tabs to the right of the specified one
+func (tv *TabView) CloseTabsToRight(fromItem *TabItem) {
+	idx := -1
+	for i, it := range tv.items {
+		if it == fromItem {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 && idx < len(tv.items)-1 {
+		for i := len(tv.items) - 1; i > idx; i-- {
+			tv.CloseTab(tv.items[i])
+		}
+	}
+}
+
+// CloseAllTabs closes all open tabs
+func (tv *TabView) CloseAllTabs() {
+	for _, it := range append([]*TabItem(nil), tv.items...) {
+		tv.CloseTab(it)
+	}
+}
+
 // GetCurrentTab returns active selected TabItem
 func (tv *TabView) GetCurrentTab() *TabItem {
 	pageNum := tv.Notebook.GetCurrentPage()
@@ -523,57 +565,184 @@ func (tv *TabView) showRenameDialog(item *TabItem) {
 func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
-	mRename, _ := gtk.MenuItemNewWithLabel("Переименовать вкладку...")
-	mRename.Connect("activate", func() {
-		tv.showRenameDialog(item)
-	})
-	menu.Append(mRename)
+	// 1. Goto TAB ▸
+	mGoto, _ := gtk.MenuItemNewWithLabel("Goto TAB")
+	gotoSubmenu, _ := gtk.MenuNew()
+	for idx, it := range tv.items {
+		tabIdx := idx
+		mTab, _ := gtk.MenuItemNewWithLabel(fmt.Sprintf("%d: %s", tabIdx+1, it.Session.Title))
+		mTab.Connect("activate", func() {
+			tv.Notebook.SetCurrentPage(tabIdx)
+		})
+		gotoSubmenu.Append(mTab)
+	}
+	mGoto.SetSubmenu(gotoSubmenu)
+	menu.Append(mGoto)
 
-	mSplitH, _ := gtk.MenuItemNewWithLabel("Разделить по горизонтали (сверху / снизу)")
-	mSplitH.Connect("activate", func() {
-		if tv.OnSplitRequested != nil {
-			sess := item.Session
-			if item.FocusedPane != nil {
-				sess = item.FocusedPane.Session
-			}
-			tv.OnSplitRequested(sess, false)
-		}
-	})
-	menu.Append(mSplitH)
+	// 2. Detach TAB to a new Window
+	mDetach, _ := gtk.MenuItemNewWithLabel("Detach TAB to a new Window")
+	mDetach.SetSensitive(false)
+	menu.Append(mDetach)
 
-	mSplitV, _ := gtk.MenuItemNewWithLabel("Разделить по вертикали (слева / справа)")
+	// 3. Split ▸
+	mSplit, _ := gtk.MenuItemNewWithLabel("Split")
+	splitSubmenu, _ := gtk.MenuNew()
+
+	mSplitV, _ := gtk.MenuItemNewWithLabel("Vertically")
 	mSplitV.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
 			sess := item.Session
-			if item.FocusedPane != nil {
+			if item.FocusedPane != nil && item.FocusedPane.Session != nil {
 				sess = item.FocusedPane.Session
 			}
 			tv.OnSplitRequested(sess, true)
 		}
 	})
-	menu.Append(mSplitV)
+	splitSubmenu.Append(mSplitV)
+
+	mSplitH, _ := gtk.MenuItemNewWithLabel("Horizontally")
+	mSplitH.Connect("activate", func() {
+		if tv.OnSplitRequested != nil {
+			sess := item.Session
+			if item.FocusedPane != nil && item.FocusedPane.Session != nil {
+				sess = item.FocusedPane.Session
+			}
+			tv.OnSplitRequested(sess, false)
+		}
+	})
+	splitSubmenu.Append(mSplitH)
 
 	if len(item.Panes) > 1 {
-		mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать сплит в отдельные вкладки")
+		mUnsplit, _ := gtk.MenuItemNewWithLabel("Unsplit (Merge Panes)")
 		mUnsplit.Connect("activate", func() {
 			tv.UnsplitTab(item)
 		})
-		menu.Append(mUnsplit)
+		splitSubmenu.Append(mUnsplit)
 	}
 
-	sep, _ := gtk.SeparatorMenuItemNew()
-	menu.Append(sep)
+	mSplit.SetSubmenu(splitSubmenu)
+	menu.Append(mSplit)
 
-	mClose, _ := gtk.MenuItemNewWithLabel("Закрыть вкладку")
+	// 4. Add to Cluster
+	mAddCluster, _ := gtk.MenuItemNewWithLabel("Add to Cluster")
+	mAddCluster.Connect("activate", func() {
+		if tv.OnClusterAdmin != nil {
+			tv.OnClusterAdmin()
+		}
+	})
+	menu.Append(mAddCluster)
+
+	// 5. Remove from Cluster
+	mRemCluster, _ := gtk.MenuItemNewWithLabel("Remove from Cluster")
+	mRemCluster.SetSensitive(false)
+	menu.Append(mRemCluster)
+
+	// 6. Cluster Admin...
+	mClusterAdmin, _ := gtk.MenuItemNewWithLabel("Cluster Admin...")
+	mClusterAdmin.Connect("activate", func() {
+		if tv.OnClusterAdmin != nil {
+			tv.OnClusterAdmin()
+		}
+	})
+	menu.Append(mClusterAdmin)
+
+	// 7. Find...
+	mFind, _ := gtk.MenuItemNewWithLabel("Find...")
+	mFind.Connect("activate", func() {
+		if tv.OnFindRequested != nil {
+			tv.OnFindRequested(item)
+		}
+	})
+	menu.Append(mFind)
+
+	// 8. Save session log...
+	mSaveLog, _ := gtk.MenuItemNewWithLabel("Save session log...")
+	mSaveLog.Connect("activate", func() {
+		if tv.OnSaveLogRequested != nil {
+			tv.OnSaveLogRequested(item.Session)
+		}
+	})
+	menu.Append(mSaveLog)
+
+	// 9. Edit session...
+	mEditSession, _ := gtk.MenuItemNewWithLabel("Edit session...")
+	mEditSession.Connect("activate", func() {
+		if tv.OnEditHostRequested != nil && item.Session != nil && item.Session.Host != nil {
+			tv.OnEditHostRequested(item.Session.Host)
+		}
+	})
+	menu.Append(mEditSession)
+
+	// 10. Temporary TAB Label change...
+	mRename, _ := gtk.MenuItemNewWithLabel("Temporary TAB Label change...")
+	mRename.Connect("activate", func() {
+		tv.showRenameDialog(item)
+	})
+	menu.Append(mRename)
+
+	// 11. New connection
+	mNewConn, _ := gtk.MenuItemNewWithLabel("New connection")
+	mNewConn.Connect("activate", func() {
+		if tv.OnNewConnection != nil {
+			tv.OnNewConnection()
+		}
+	})
+	menu.Append(mNewConn)
+
+	// 12. Duplicate connection
+	mDuplicate, _ := gtk.MenuItemNewWithLabel("Duplicate connection")
+	mDuplicate.Connect("activate", func() {
+		if tv.OnDuplicateRequested != nil {
+			tv.OnDuplicateRequested(item.Session)
+		}
+	})
+	menu.Append(mDuplicate)
+
+	// 13. Disconnect session
+	mDisconnect, _ := gtk.MenuItemNewWithLabel("Disconnect session")
+	mDisconnect.Connect("activate", func() {
+		if item.Session != nil {
+			_ = item.Session.Close()
+		}
+	})
+	menu.Append(mDisconnect)
+
+	// 14. Restart session
+	mRestart, _ := gtk.MenuItemNewWithLabel("Restart session")
+	mRestart.Connect("activate", func() {
+		if tv.OnReconnectRequested != nil {
+			tv.OnReconnectRequested(item.Session)
+		}
+	})
+	menu.Append(mRestart)
+
+	// 15. Close terminal
+	mClose, _ := gtk.MenuItemNewWithLabel("Close terminal")
 	mClose.Connect("activate", func() {
 		tv.CloseTab(item)
 	})
 	menu.Append(mClose)
 
+	// 16. Close other terminals
+	mCloseOthers, _ := gtk.MenuItemNewWithLabel("Close other terminals")
+	mCloseOthers.Connect("activate", func() {
+		tv.CloseOtherTabs(item)
+	})
+	if len(tv.items) <= 1 {
+		mCloseOthers.SetSensitive(false)
+	}
+	menu.Append(mCloseOthers)
+
+	// 17. Close all terminals
+	mCloseAll, _ := gtk.MenuItemNewWithLabel("Close all terminals")
+	mCloseAll.Connect("activate", func() {
+		tv.CloseAllTabs()
+	})
+	menu.Append(mCloseAll)
+
 	menu.ShowAll()
 	menu.PopupAtPointer(nil)
 }
-
 func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 

@@ -17,12 +17,16 @@ import (
 	cryptoSsh "golang.org/x/crypto/ssh"
 )
 
-// StreamSplitter splits output stream to PTY Slave, Logger, RingBuffer, and DirectoryTracker
+// GlobalClipboardHandler handles OSC 52 clipboard write events across sessions
+var GlobalClipboardHandler func(target, text string)
+
+// StreamSplitter splits output stream to PTY Slave, Logger, RingBuffer, DirectoryTracker, and OSC 52 parser
 type StreamSplitter struct {
 	slave   io.Writer
 	logger  *SessionLogger
 	tracker *sftp.DirectoryTracker
 	sess    *Session
+	osc52   *OSC52Parser
 }
 
 func (w *StreamSplitter) Write(p []byte) (n int, err error) {
@@ -32,6 +36,9 @@ func (w *StreamSplitter) Write(p []byte) (n int, err error) {
 		n = len(p)
 	}
 
+	if w.osc52 != nil {
+		w.osc52.Feed(p)
+	}
 	if w.logger != nil {
 		_, _ = w.logger.Write(p)
 	}
@@ -122,6 +129,11 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		logger:  logger,
 		tracker: sess.Tracker,
 		sess:    sess,
+		osc52: NewOSC52Parser(func(target, text string) {
+			if GlobalClipboardHandler != nil {
+				GlobalClipboardHandler(target, text)
+			}
+		}),
 	}
 
 	// Start protocol driver
