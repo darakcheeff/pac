@@ -27,7 +27,6 @@ import (
 type AppWindow struct {
 	Window       *gtk.Window
 	MainBox      *gtk.Box
-	MenuBar      *gtk.MenuBar
 	ToolBar      *gtk.Toolbar
 	MainPaned    *gtk.Paned
 	LeftPaned    *gtk.Paned
@@ -148,11 +147,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	mainBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 	win.Add(mainBox)
 
-	// 1. MenuBar
-	menuBar, _ := gtk.MenuBarNew()
-	mainBox.PackStart(menuBar, false, false, 0)
-
-	// 2. ToolBar
+	// 1. ToolBar (Clean, compact single top bar)
 	toolBar, _ := gtk.ToolbarNew()
 	toolBar.SetStyle(gtk.TOOLBAR_ICONS)
 	toolBar.SetIconSize(gtk.ICON_SIZE_SMALL_TOOLBAR)
@@ -215,7 +210,6 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	app := &AppWindow{
 		Window:       win,
 		MainBox:      mainBox,
-		MenuBar:      menuBar,
 		ToolBar:      toolBar,
 		MainPaned:    mainPaned,
 		LeftPaned:    leftPaned,
@@ -279,134 +273,6 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 }
 
 func (app *AppWindow) setupMenuAndToolbar() {
-	// --- Menus ---
-	// 1. Connection Menu (formerly File)
-	mConn, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Подключение", "_Connection"))
-	connMenu, _ := gtk.MenuNew()
-	mConn.SetSubmenu(connMenu)
-
-	mNewHost, _ := gtk.MenuItemNewWithLabel(i18n.T("Новое подключение...", "New Connection..."))
-	mNewHost.Connect("activate", func() {
-		dialogs.ShowHostEditorDialog(app.Window, app.store, nil, "root", func(h *storage.Host) {
-			app.HostTree.Reload()
-		})
-	})
-	connMenu.Append(mNewHost)
-
-	mQuickConnect, _ := gtk.MenuItemNewWithLabel(i18n.T("Быстрое подключение...", "Quick Connect..."))
-	mQuickConnect.Connect("activate", func() {
-		dialogs.ShowQuickConnectDialog(app.Window, func(h *storage.Host) {
-			app.ConnectToHost(h)
-		})
-	})
-	connMenu.Append(mQuickConnect)
-
-	mImportOld, _ := gtk.MenuItemNewWithLabel(i18n.T("Импорт из Ásbrú v6 (asbru.conf)...", "Import from Ásbrú v6 (asbru.conf)..."))
-	mImportOld.Connect("activate", func() {
-		n, err := migration.MigrateOldConfig(app.store, "")
-		if err == nil {
-			app.HostTree.Reload()
-			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий", "Successfully imported %d sessions", n))
-		}
-	})
-	connMenu.Append(mImportOld)
-
-	sep1, _ := gtk.SeparatorMenuItemNew()
-	connMenu.Append(sep1)
-
-	mQuit, _ := gtk.MenuItemNewWithLabel(i18n.T("Выход", "Quit"))
-	mQuit.Connect("activate", func() {
-		app.Quit()
-	})
-	connMenu.Append(mQuit)
-	app.MenuBar.Append(mConn)
-
-	// 2. Search Menu (standalone top-level menu)
-	mSearch, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Поиск", "_Search"))
-	searchMenu, _ := gtk.MenuNew()
-	mSearch.SetSubmenu(searchMenu)
-
-	mFindInTerm, _ := gtk.MenuItemNewWithLabel(i18n.T("Поиск в текущем терминале...", "Find in current terminal..."))
-	mFindInTerm.Connect("activate", func() {
-		tab := app.TabView.GetCurrentTab()
-		if tab != nil && tab.FocusedPane != nil && tab.FocusedPane.Search != nil {
-			tab.FocusedPane.Search.Show()
-		}
-	})
-	searchMenu.Append(mFindInTerm)
-
-	mGlobalSearch, _ := gtk.MenuItemNewWithLabel(i18n.T("Глобальный поиск по всем сессиям...", "Global Search across all sessions..."))
-	mGlobalSearch.Connect("activate", func() {
-		ShowGlobalSearchDialog(app.Window, app.manager, func(sessionID string) {
-			app.TabView.SelectSession(sessionID)
-		})
-	})
-	searchMenu.Append(mGlobalSearch)
-	app.MenuBar.Append(mSearch)
-
-	// 3. View Menu
-	mView, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Вид", "_View"))
-	viewMenu, _ := gtk.MenuNew()
-	mView.SetSubmenu(viewMenu)
-
-	mToggleSFTP, _ := gtk.CheckMenuItemNewWithLabel(i18n.T("SFTP файловый менеджер", "SFTP File Manager"))
-	mToggleSFTP.SetActive(true)
-	mToggleSFTP.Connect("toggled", func() {
-		if mToggleSFTP.GetActive() {
-			app.SFTPPanel.Box.Show()
-		} else {
-			app.SFTPPanel.Box.Hide()
-		}
-	})
-	viewMenu.Append(mToggleSFTP)
-
-	mToggleBroadcast, _ := gtk.CheckMenuItemNewWithLabel(i18n.T("Панель кластерного ввода", "Cluster Input Bar"))
-	mToggleBroadcast.Connect("toggled", func() {
-		if mToggleBroadcast.GetActive() {
-			app.BroadcastBar.Box.Show()
-			app.BroadcastBar.Entry.GrabFocus()
-		} else {
-			app.BroadcastBar.Box.Hide()
-		}
-	})
-	viewMenu.Append(mToggleBroadcast)
-
-	app.MenuBar.Append(mView)
-
-	// Sessions Menu
-	mSessions, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Сессии", "_Sessions"))
-	sessMenu, _ := gtk.MenuNew()
-	mSessions.SetSubmenu(sessMenu)
-
-	mSplitHoriz, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить экран по горизонтали", "Split Screen Horizontally"))
-	mSplitHoriz.Connect("activate", func() {
-		tab := app.TabView.GetCurrentTab()
-		if tab != nil {
-			app.handleSplit(tab.Session, false)
-		}
-	})
-	sessMenu.Append(mSplitHoriz)
-
-	mSplitVert, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить экран по вертикали", "Split Screen Vertically"))
-	mSplitVert.Connect("activate", func() {
-		tab := app.TabView.GetCurrentTab()
-		if tab != nil {
-			app.handleSplit(tab.Session, true)
-		}
-	})
-	sessMenu.Append(mSplitVert)
-
-	mUnsplit, _ := gtk.MenuItemNewWithLabel(i18n.T("Разгруппировать сплит в новую вкладку", "Unsplit to New Tab"))
-	mUnsplit.Connect("activate", func() {
-		tab := app.TabView.GetCurrentTab()
-		if tab != nil {
-			app.TabView.UnsplitTab(tab)
-		}
-	})
-	sessMenu.Append(mUnsplit)
-
-	app.MenuBar.Append(mSessions)
-
 	// --- ToolBar Buttons with standard icons & rich tooltips ---
 	// 1. New Connection
 	btnNew, _ := gtk.ToolButtonNew(nil, i18n.T("Новое подключение", "New Connection"))
@@ -462,6 +328,17 @@ func (app *AppWindow) setupMenuAndToolbar() {
 		}
 	})
 	app.ToolBar.Insert(btnSplitV, -1)
+
+	// 5. Unsplit (Restore / Detach split pane)
+	btnUnsplit, _ := gtk.ToolButtonNew(GetUnsplitImage(), i18n.T("Разгруппировать", "Unsplit"))
+	btnUnsplit.SetTooltipText(i18n.T("Разгруппировать сплит в отдельную вкладку", "Unsplit pane into separate tab"))
+	btnUnsplit.Connect("clicked", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil {
+			app.TabView.UnsplitTab(tab)
+		}
+	})
+	app.ToolBar.Insert(btnUnsplit, -1)
 
 	sepTool2, _ := gtk.SeparatorToolItemNew()
 	app.ToolBar.Insert(sepTool2, -1)
@@ -549,6 +426,14 @@ func (app *AppWindow) setupSignals() {
 		}
 		_ = app.store.SaveGroup(g)
 		app.HostTree.Reload()
+	}
+
+	app.HostTree.OnImportOld = func() {
+		n, err := migration.MigrateOldConfig(app.store, "")
+		if err == nil {
+			app.HostTree.Reload()
+			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий", "Successfully imported %d sessions", n))
+		}
 	}
 
 	app.TabView.OnTabChanged = func(sess *session.Session) {

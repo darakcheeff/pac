@@ -15,13 +15,22 @@ const splitHorizontalSVG = `<?xml version="1.0" encoding="UTF-8"?>
 
 const splitVerticalSVG = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
-  <rect x="2" y="2" width="16" height="16" rx="2" fill="#eeeeec" stroke="#555753" stroke-width="1.8"/>
-  <line x1="10" y1="2" x2="10" y2="18" stroke="#555753" stroke-width="1.8"/>
-  <rect x="4" y="4.5" width="2" height="3" rx="0.5" fill="#4e9a06"/>
-  <rect x="12" y="4.5" width="2" height="3" rx="0.5" fill="#3465a4"/>
+  <g transform="rotate(-90 10 10)">
+    <rect x="2" y="2" width="16" height="16" rx="2" fill="#eeeeec" stroke="#555753" stroke-width="1.8"/>
+    <line x1="2" y1="10" x2="18" y2="10" stroke="#555753" stroke-width="1.8"/>
+    <rect x="4" y="4.5" width="4" height="2" rx="0.5" fill="#4e9a06"/>
+    <rect x="4" y="12.5" width="4" height="2" rx="0.5" fill="#3465a4"/>
+  </g>
 </svg>`
 
-// Download icon: Tray at bottom with arrow pointing DOWN into the tray
+const unsplitSVG = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
+  <rect x="2" y="2.5" width="7" height="15" rx="1.8" fill="#555753"/>
+  <polygon points="3.5,10 7.5,6.5 7.5,13.5" fill="#eeeeec"/>
+  <rect x="11" y="2.5" width="7" height="15" rx="1.8" fill="#555753"/>
+  <polygon points="16.5,10 12.5,6.5 12.5,13.5" fill="#eeeeec"/>
+</svg>`
+
 const downloadSVG = `<?xml version="1.0" encoding="UTF-8"?>
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
   <path d="m 8 1 c -0.55 0 -1 0.45 -1 1 v 7.586 l -2.293 -2.293 c -0.39 -0.39 -1.023 -0.39 -1.414 0 s -0.39 1.023 0 1.414 l 4 4 c 0.39 0.39 1.023 0.39 1.414 0 l 4 -4 c 0.39 -0.39 0.39 -1.023 0 -1.414 s -1.023 -0.39 -1.414 0 l -2.293 2.293 v -7.586 c 0 -0.55 -0.45 -1 -1 -1 z m -7 13 v 2 h 14 v -2 z" fill="#2e3436"/>
@@ -41,6 +50,11 @@ func GetSplitHorizontalImage() *gtk.Image {
 // GetSplitVerticalImage returns a crisp GTK Image representing left/right screen split
 func GetSplitVerticalImage() *gtk.Image {
 	return imageFromSVG(splitVerticalSVG, "view-split-left-right-symbolic")
+}
+
+// GetUnsplitImage returns the unsplit/restore icon based on 03.png
+func GetUnsplitImage() *gtk.Image {
+	return imageFromSVG(unsplitSVG, "view-restore-symbolic")
 }
 
 // GetDownloadImage returns the download icon (arrow pointing into tray)

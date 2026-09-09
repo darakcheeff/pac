@@ -30,6 +30,7 @@ type HostTree struct {
 	OnDeleteHost  func(hostID string)
 	OnAddHost     func(parentGroupID string)
 	OnAddGroup    func(parentGroupID string)
+	OnImportOld   func()
 }
 
 func NewHostTree(store *storage.Store) (*HostTree, error) {
@@ -108,6 +109,9 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 				}
 				iter, _ := treeStore.GetIter(path)
 				ht.showContextMenu(iter, btnEvent.Time())
+				return true
+			} else {
+				ht.showContextMenu(nil, btnEvent.Time())
 				return true
 			}
 		}
@@ -259,6 +263,17 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 			}
 		})
 		menu.Append(mAddGroup)
+
+		sepImp, _ := gtk.SeparatorMenuItemNew()
+		menu.Append(sepImp)
+
+		mImportOld, _ := gtk.MenuItemNewWithLabel(i18n.T("Импорт из Ásbrú v6 (asbru.conf)...", "Import from Ásbrú v6 (asbru.conf)..."))
+		mImportOld.Connect("activate", func() {
+			if ht.OnImportOld != nil {
+				ht.OnImportOld()
+			}
+		})
+		menu.Append(mImportOld)
 
 		if idStr != "root" {
 			sep, _ := gtk.SeparatorMenuItemNew()
