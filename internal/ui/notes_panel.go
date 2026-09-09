@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/darakcheeff/pac/internal/session"
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/gotk3/gotk3/pango"
@@ -37,14 +38,14 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 
 	// Header Bar
 	headerBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
-	titleLabel, _ := gtk.LabelNew("Заметки к вкладке")
+	titleLabel, _ := gtk.LabelNew(i18n.T("Заметки к вкладке", "Tab Notes"))
 	titleLabel.SetHAlign(gtk.ALIGN_START)
 	titleLabel.SetHExpand(true)
 	titleLabel.SetEllipsize(pango.ELLIPSIZE_END)
 	titleLabel.SetMaxWidthChars(15)
 
 	clearBtn, _ := gtk.ButtonNewFromIconName("edit-clear-symbolic", gtk.ICON_SIZE_BUTTON)
-	clearBtn.SetTooltipText("Очистить текст заметки")
+	clearBtn.SetTooltipText(i18n.T("Очистить текст заметки", "Clear notes"))
 
 	headerBox.PackStart(titleLabel, true, true, 0)
 	headerBox.PackEnd(clearBtn, false, false, 0)
@@ -104,7 +105,7 @@ func (np *NotesPanel) LoadSessionNotes(sess *session.Session) {
 	}()
 
 	if sess == nil {
-		np.HeaderLabel.SetText("Заметки (нет открытых вкладок)")
+		np.HeaderLabel.SetText(i18n.T("Заметки (нет открытых вкладок)", "Notes (no active tabs)"))
 		np.TextBuffer.SetText("")
 		np.TextView.SetSensitive(false)
 		np.lastSavedText = ""
@@ -112,7 +113,7 @@ func (np *NotesPanel) LoadSessionNotes(sess *session.Session) {
 	}
 
 	np.TextView.SetSensitive(true)
-	np.HeaderLabel.SetText("Заметки: " + sess.Title)
+	np.HeaderLabel.SetText(i18n.Tf("Заметки: %s", "Notes: %s", sess.Title))
 	np.lastSavedText = sess.Notes
 	np.TextBuffer.SetText(sess.Notes)
 }

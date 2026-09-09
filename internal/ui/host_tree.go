@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
@@ -144,7 +145,11 @@ func (ht *HostTree) Reload() {
 			icon = g.Icon
 		}
 		_ = ht.TreeStore.SetValue(iter, ColID, g.ID)
-		_ = ht.TreeStore.SetValue(iter, ColName, g.Name)
+		groupName := g.Name
+		if g.ID == "root" {
+			groupName = i18n.T("Все подключения", "All Connections")
+		}
+		_ = ht.TreeStore.SetValue(iter, ColName, groupName)
 		_ = ht.TreeStore.SetValue(iter, ColIcon, icon)
 		_ = ht.TreeStore.SetValue(iter, ColType, "group")
 		_ = ht.TreeStore.SetValue(iter, ColProtocol, "")
@@ -198,7 +203,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		}
 
 		// Connect item
-		mConnect, _ := gtk.MenuItemNewWithLabel("Подключиться")
+		mConnect, _ := gtk.MenuItemNewWithLabel(i18n.T("Подключиться", "Connect"))
 		mConnect.Connect("activate", func() {
 			if ht.OnConnectHost != nil {
 				ht.OnConnectHost(host)
@@ -207,7 +212,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		menu.Append(mConnect)
 
 		// Edit item
-		mEdit, _ := gtk.MenuItemNewWithLabel("Свойства / Редактировать")
+		mEdit, _ := gtk.MenuItemNewWithLabel(i18n.T("Свойства / Редактировать", "Properties / Edit"))
 		mEdit.Connect("activate", func() {
 			if ht.OnEditHost != nil {
 				ht.OnEditHost(host)
@@ -216,11 +221,11 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		menu.Append(mEdit)
 
 		// Duplicate item
-		mDup, _ := gtk.MenuItemNewWithLabel("Дублировать хост")
+		mDup, _ := gtk.MenuItemNewWithLabel(i18n.T("Дублировать хост", "Duplicate Host"))
 		mDup.Connect("activate", func() {
 			dup := *host
 			dup.ID = fmt.Sprintf("host-%d", eventTime)
-			dup.Name = host.Name + " (копия)"
+			dup.Name = host.Name + i18n.T(" (копия)", " (copy)")
 			_ = ht.store.SaveHost(&dup)
 			ht.Reload()
 		})
@@ -230,7 +235,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		menu.Append(sep)
 
 		// Delete item
-		mDel, _ := gtk.MenuItemNewWithLabel("Удалить")
+		mDel, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить", "Delete"))
 		mDel.Connect("activate", func() {
 			_ = ht.store.DeleteHost(host.ID)
 			ht.Reload()
@@ -239,7 +244,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 
 	} else {
 		// Group context menu
-		mAddHost, _ := gtk.MenuItemNewWithLabel("Добавить новое подключение")
+		mAddHost, _ := gtk.MenuItemNewWithLabel(i18n.T("Добавить новое подключение", "Add New Connection"))
 		mAddHost.Connect("activate", func() {
 			if ht.OnAddHost != nil {
 				ht.OnAddHost(idStr)
@@ -247,7 +252,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		})
 		menu.Append(mAddHost)
 
-		mAddGroup, _ := gtk.MenuItemNewWithLabel("Создать подпапку")
+		mAddGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Создать подпапку", "Create Subfolder"))
 		mAddGroup.Connect("activate", func() {
 			if ht.OnAddGroup != nil {
 				ht.OnAddGroup(idStr)
@@ -259,7 +264,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 			sep, _ := gtk.SeparatorMenuItemNew()
 			menu.Append(sep)
 
-			mDelGroup, _ := gtk.MenuItemNewWithLabel("Удалить папку")
+			mDelGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить папку", "Delete Folder"))
 			mDelGroup.Connect("activate", func() {
 				_ = ht.store.DeleteGroup(idStr)
 				ht.Reload()

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/engine/sftp"
 	"github.com/darakcheeff/pac/internal/engine/watcher"
 	"github.com/gotk3/gotk3/gdk"
@@ -52,30 +53,30 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	topBox.SetMarginTop(4)
 
 	upBtn, _ := gtk.ButtonNewFromIconName("go-up-symbolic", gtk.ICON_SIZE_BUTTON)
-	upBtn.SetTooltipText("Перейти в родительский каталог (Вверх)")
+	upBtn.SetTooltipText(i18n.T("Перейти в родительский каталог (Вверх)", "Go to parent directory (Up)"))
 	topBox.PackStart(upBtn, false, false, 0)
 
 	refreshBtn, _ := gtk.ButtonNewFromIconName("view-refresh-symbolic", gtk.ICON_SIZE_BUTTON)
-	refreshBtn.SetTooltipText("Обновить список файлов и папок (F5)")
+	refreshBtn.SetTooltipText(i18n.T("Обновить список файлов и папок (F5)", "Refresh files and folders (F5)"))
 	topBox.PackStart(refreshBtn, false, false, 0)
 
 	mkdirBtn, _ := gtk.ButtonNewFromIconName("folder-new-symbolic", gtk.ICON_SIZE_BUTTON)
-	mkdirBtn.SetTooltipText("Создать новую папку на сервере (F7)")
+	mkdirBtn.SetTooltipText(i18n.T("Создать новую папку на сервере (F7)", "Create new folder on server (F7)"))
 	topBox.PackStart(mkdirBtn, false, false, 0)
 
 	uploadBtn, _ := gtk.ButtonNew()
 	uploadBtn.SetImage(GetUploadImage())
-	uploadBtn.SetTooltipText("Выгрузить файлы с локального компьютера на сервер (Upload)")
+	uploadBtn.SetTooltipText(i18n.T("Выгрузить файлы на сервер (Upload)", "Upload files to server"))
 	topBox.PackStart(uploadBtn, false, false, 0)
 
 	downloadBtn, _ := gtk.ButtonNew()
 	downloadBtn.SetImage(GetDownloadImage())
-	downloadBtn.SetTooltipText("Скачать выбранный файл на локальный компьютер (Download)")
+	downloadBtn.SetTooltipText(i18n.T("Скачать выбранный файл (Download)", "Download selected file"))
 	topBox.PackStart(downloadBtn, false, false, 0)
 
 	pathEntry, _ := gtk.EntryNew()
 	pathEntry.SetPlaceholderText("/remote/path")
-	pathEntry.SetTooltipText("Текущий путь на удаленном сервере (введите путь и нажмите Enter)")
+	pathEntry.SetTooltipText(i18n.T("Текущий путь на удаленном сервере (введите путь и нажмите Enter)", "Current remote path (enter path and press Enter)"))
 	pathEntry.SetHExpand(true)
 	pathEntry.SetWidthChars(5)
 	topBox.PackStart(pathEntry, true, true, 0)
@@ -89,7 +90,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 
 	// Column: Icon + Name
 	colName, _ := gtk.TreeViewColumnNew()
-	colName.SetTitle("Имя")
+	colName.SetTitle(i18n.T("Имя", "Name"))
 	colName.SetResizable(true)
 	colName.SetExpand(true)
 	rPixbuf, _ := gtk.CellRendererPixbufNew()
@@ -103,14 +104,14 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 
 	// Column: Size
 	rSize, _ := gtk.CellRendererTextNew()
-	colSize, _ := gtk.TreeViewColumnNewWithAttribute("Размер", rSize, "text", SFTPColSize)
+	colSize, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Размер", "Size"), rSize, "text", SFTPColSize)
 	colSize.SetResizable(true)
 	colSize.SetMinWidth(30)
 	treeView.AppendColumn(colSize)
 
 	// Column: ModTime (Дата изменения)
 	rTime, _ := gtk.CellRendererTextNew()
-	colTime, _ := gtk.TreeViewColumnNewWithAttribute("Дата изменения", rTime, "text", SFTPColTime)
+	colTime, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Дата изменения", "Date Modified"), rTime, "text", SFTPColTime)
 	colTime.SetResizable(true)
 	colTime.SetMinWidth(30)
 	treeView.AppendColumn(colTime)
@@ -128,7 +129,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	progressBox.SetMarginEnd(4)
 	progressBox.SetMarginBottom(4)
 
-	statusLabel, _ := gtk.LabelNew("Готово")
+	statusLabel, _ := gtk.LabelNew(i18n.T("Готово", "Ready"))
 	statusLabel.SetHAlign(gtk.ALIGN_START)
 	statusLabel.SetEllipsize(pango.ELLIPSIZE_END)
 	progressBox.PackStart(statusLabel, false, false, 0)
@@ -266,12 +267,12 @@ func (sp *SFTPPanel) LoadDirectory(path string) {
 		return
 	}
 
-	sp.StatusLabel.SetText("Загрузка каталога...")
+	sp.StatusLabel.SetText(i18n.T("Загрузка каталога...", "Loading directory..."))
 	go func() {
 		items, err := sp.client.ListDir(path)
 		glib.IdleAdd(func() {
 			if err != nil {
-				sp.StatusLabel.SetText("Ошибка: " + err.Error())
+				sp.StatusLabel.SetText(i18n.T("Ошибка: ", "Error: ") + err.Error())
 				return
 			}
 
@@ -296,7 +297,7 @@ func (sp *SFTPPanel) LoadDirectory(path string) {
 				_ = sp.ListStore.SetValue(iter, SFTPColIcon, icon)
 			}
 
-			sp.StatusLabel.SetText(fmt.Sprintf("Элементов: %d", len(items)))
+			sp.StatusLabel.SetText(i18n.Tf("Элементов: %d", "Items: %d", len(items)))
 		})
 	}()
 }
@@ -309,7 +310,7 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 	fileName := filepath.Base(localPath)
 	remoteDest := filepath.Join(sp.client.CurrentDir(), fileName)
 
-	sp.StatusLabel.SetText("Выгрузка: " + fileName)
+	sp.StatusLabel.SetText(i18n.T("Выгрузка: ", "Uploading: ") + fileName)
 	sp.ProgressBar.SetFraction(0.0)
 
 	go func() {
@@ -324,10 +325,10 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 		glib.IdleAdd(func() {
 			sp.ProgressBar.SetFraction(0.0)
 			if err == nil {
-				sp.StatusLabel.SetText("Выгрузка завершена: " + fileName)
+				sp.StatusLabel.SetText(i18n.T("Выгрузка завершена: ", "Upload completed: ") + fileName)
 				sp.LoadDirectory(sp.client.CurrentDir())
 			} else {
-				sp.StatusLabel.SetText("Ошибка выгрузки: " + err.Error())
+				sp.StatusLabel.SetText(i18n.T("Ошибка выгрузки: ", "Upload error: ") + err.Error())
 			}
 		})
 	}()
@@ -335,11 +336,11 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 
 func (sp *SFTPPanel) showUploadFileChooser() {
 	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
-		"Выберите файл для выгрузки на сервер",
+		i18n.T("Выберите файл для выгрузки на сервер", "Select file to upload"),
 		nil,
 		gtk.FILE_CHOOSER_ACTION_OPEN,
-		"Отмена", gtk.RESPONSE_CANCEL,
-		"Выгрузить", gtk.RESPONSE_ACCEPT,
+		i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+		i18n.T("Выгрузить", "Upload"), gtk.RESPONSE_ACCEPT,
 	)
 	dlg.SetSelectMultiple(true)
 	if dlg.Run() == gtk.RESPONSE_ACCEPT {
@@ -362,18 +363,18 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 	remotePath := filepath.Join(sp.client.CurrentDir(), nameStr)
 
 	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
-		"Сохранить файл на локальный компьютер",
+		i18n.T("Сохранить файл на локальный компьютер", "Save file to local computer"),
 		nil,
 		gtk.FILE_CHOOSER_ACTION_SAVE,
-		"Отмена", gtk.RESPONSE_CANCEL,
-		"Скачать", gtk.RESPONSE_ACCEPT,
+		i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+		i18n.T("Скачать", "Download"), gtk.RESPONSE_ACCEPT,
 	)
 	dlg.SetCurrentName(nameStr)
 	dlg.SetDoOverwriteConfirmation(true)
 
 	if dlg.Run() == gtk.RESPONSE_ACCEPT {
 		localPath := dlg.GetFilename()
-		sp.StatusLabel.SetText("Скачивание: " + nameStr)
+		sp.StatusLabel.SetText(i18n.T("Скачивание: ", "Downloading: ") + nameStr)
 		sp.ProgressBar.SetFraction(0.0)
 
 		go func() {
@@ -388,9 +389,9 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 			glib.IdleAdd(func() {
 				sp.ProgressBar.SetFraction(0.0)
 				if err == nil {
-					sp.StatusLabel.SetText("Скачивание завершено: " + nameStr)
+					sp.StatusLabel.SetText(i18n.T("Скачивание завершено: ", "Download completed: ") + nameStr)
 				} else {
-					sp.StatusLabel.SetText("Ошибка скачивания: " + err.Error())
+					sp.StatusLabel.SetText(i18n.T("Ошибка скачивания: ", "Download error: ") + err.Error())
 				}
 			})
 		}()
@@ -404,7 +405,7 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 	}
 
 	dlg, _ := gtk.DialogNew()
-	dlg.SetTitle("Создать папку на сервере")
+	dlg.SetTitle(i18n.T("Создать папку на сервере", "Create Folder on Server"))
 	dlg.SetModal(true)
 	dlg.SetDefaultSize(320, 120)
 
@@ -415,7 +416,7 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 	vbox.SetMarginTop(12)
 	vbox.SetMarginBottom(12)
 
-	lbl, _ := gtk.LabelNew("Имя новой папки:")
+	lbl, _ := gtk.LabelNew(i18n.T("Имя новой папки:", "New folder name:"))
 	lbl.SetHAlign(gtk.ALIGN_START)
 	vbox.PackStart(lbl, false, false, 0)
 
@@ -424,8 +425,8 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 	vbox.PackStart(entry, false, false, 0)
 	contentArea.Add(vbox)
 
-	_, _ = dlg.AddButton("Отмена", gtk.RESPONSE_CANCEL)
-	btnOk, _ := dlg.AddButton("Создать", gtk.RESPONSE_OK)
+	_, _ = dlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	btnOk, _ := dlg.AddButton(i18n.T("Создать", "Create"), gtk.RESPONSE_OK)
 	btnOk.SetCanDefault(true)
 	dlg.SetDefault(btnOk)
 
@@ -439,7 +440,7 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 			if err == nil {
 				sp.LoadDirectory(sp.client.CurrentDir())
 			} else {
-				sp.StatusLabel.SetText("Ошибка создания папки: " + err.Error())
+				sp.StatusLabel.SetText(i18n.T("Ошибка создания папки: ", "Folder creation error: ") + err.Error())
 			}
 		}
 	}
@@ -455,7 +456,7 @@ func (sp *SFTPPanel) showRenameDialog(iter *gtk.TreeIter) {
 	oldPath := filepath.Join(sp.client.CurrentDir(), oldName)
 
 	dlg, _ := gtk.DialogNew()
-	dlg.SetTitle("Переименовать файл / папку")
+	dlg.SetTitle(i18n.T("Переименовать файл / папку", "Rename File / Folder"))
 	dlg.SetModal(true)
 	dlg.SetDefaultSize(320, 120)
 
@@ -466,7 +467,7 @@ func (sp *SFTPPanel) showRenameDialog(iter *gtk.TreeIter) {
 	vbox.SetMarginTop(12)
 	vbox.SetMarginBottom(12)
 
-	lbl, _ := gtk.LabelNew("Новое имя:")
+	lbl, _ := gtk.LabelNew(i18n.T("Новое имя:", "New name:"))
 	lbl.SetHAlign(gtk.ALIGN_START)
 	vbox.PackStart(lbl, false, false, 0)
 
@@ -476,8 +477,8 @@ func (sp *SFTPPanel) showRenameDialog(iter *gtk.TreeIter) {
 	vbox.PackStart(entry, false, false, 0)
 	contentArea.Add(vbox)
 
-	_, _ = dlg.AddButton("Отмена", gtk.RESPONSE_CANCEL)
-	btnOk, _ := dlg.AddButton("Сохранить", gtk.RESPONSE_OK)
+	_, _ = dlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	btnOk, _ := dlg.AddButton(i18n.T("Сохранить", "Save"), gtk.RESPONSE_OK)
 	btnOk.SetCanDefault(true)
 	dlg.SetDefault(btnOk)
 
@@ -491,7 +492,7 @@ func (sp *SFTPPanel) showRenameDialog(iter *gtk.TreeIter) {
 			if err == nil {
 				sp.LoadDirectory(sp.client.CurrentDir())
 			} else {
-				sp.StatusLabel.SetText("Ошибка переименования: " + err.Error())
+				sp.StatusLabel.SetText(i18n.T("Ошибка переименования: ", "Rename error: ") + err.Error())
 			}
 		}
 	}
@@ -503,21 +504,21 @@ func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
 		return
 	}
 
-	sp.StatusLabel.SetText("Открытие в редакторе...")
+	sp.StatusLabel.SetText(i18n.T("Открытие в редакторе...", "Opening in editor..."))
 	downloadFn := func(localPath string) error {
 		return sp.client.DownloadFile(context.Background(), remotePath, localPath, nil)
 	}
 
 	uploadFn := func(ctx context.Context, localPath, remPath string) error {
 		glib.IdleAdd(func() {
-			sp.StatusLabel.SetText("Сохранение на сервер: " + filepath.Base(remPath))
+			sp.StatusLabel.SetText(i18n.T("Сохранение на сервер: ", "Saving to server: ") + filepath.Base(remPath))
 		})
 		err := sp.client.UploadFile(ctx, localPath, remPath, nil)
 		glib.IdleAdd(func() {
 			if err == nil {
-				sp.StatusLabel.SetText("Файл сохранен: " + filepath.Base(remPath))
+				sp.StatusLabel.SetText(i18n.T("Файл сохранен: ", "File saved: ") + filepath.Base(remPath))
 			} else {
-				sp.StatusLabel.SetText("Ошибка сохранения: " + err.Error())
+				sp.StatusLabel.SetText(i18n.T("Ошибка сохранения: ", "Save error: ") + err.Error())
 			}
 		})
 		return err
@@ -538,29 +539,29 @@ func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
 	if !isDir {
-		mEdit, _ := gtk.MenuItemNewWithLabel("Открыть во внешнем редакторе")
+		mEdit, _ := gtk.MenuItemNewWithLabel(i18n.T("Открыть во внешнем редакторе", "Open in external editor"))
 		mEdit.Connect("activate", func() {
 			sp.triggerRemoteEdit(remotePath)
 		})
 		menu.Append(mEdit)
 
-		mDownload, _ := gtk.MenuItemNewWithLabel("Скачать файл на компьютер (Download)")
+		mDownload, _ := gtk.MenuItemNewWithLabel(i18n.T("Скачать файл (Download)", "Download file"))
 		mDownload.Connect("activate", func() {
 			sp.downloadSelectedFile(iter)
 		})
 		menu.Append(mDownload)
 	}
 
-	mRename, _ := gtk.MenuItemNewWithLabel("Переименовать (F2)")
+	mRename, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать (F2)", "Rename (F2)"))
 	mRename.Connect("activate", func() {
 		sp.showRenameDialog(iter)
 	})
 	menu.Append(mRename)
 
-	mDelete, _ := gtk.MenuItemNewWithLabel("Удалить (Delete)")
+	mDelete, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить (Delete)", "Delete (Delete)"))
 	mDelete.Connect("activate", func() {
 		dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO,
-			"Вы уверены, что хотите удалить '%s'?", nameStr)
+			i18n.Tf("Вы уверены, что хотите удалить '%s'?", "Are you sure you want to delete '%s'?", nameStr))
 		if dlg.Run() == gtk.RESPONSE_YES {
 			_ = sp.client.Remove(remotePath)
 			sp.LoadDirectory(sp.client.CurrentDir())
@@ -572,19 +573,19 @@ func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 	sep, _ := gtk.SeparatorMenuItemNew()
 	menu.Append(sep)
 
-	mUpload, _ := gtk.MenuItemNewWithLabel("Выгрузить файл на сервер (Upload)...")
+	mUpload, _ := gtk.MenuItemNewWithLabel(i18n.T("Выгрузить файл на сервер (Upload)...", "Upload file to server..."))
 	mUpload.Connect("activate", func() {
 		sp.showUploadFileChooser()
 	})
 	menu.Append(mUpload)
 
-	mMkdir, _ := gtk.MenuItemNewWithLabel("Создать новую папку (F7)...")
+	mMkdir, _ := gtk.MenuItemNewWithLabel(i18n.T("Создать новую папку (F7)...", "Create new folder (F7)..."))
 	mMkdir.Connect("activate", func() {
 		sp.showCreateFolderDialog()
 	})
 	menu.Append(mMkdir)
 
-	mRefresh, _ := gtk.MenuItemNewWithLabel("Обновить каталог (F5)")
+	mRefresh, _ := gtk.MenuItemNewWithLabel(i18n.T("Обновить каталог (F5)", "Refresh directory (F5)"))
 	mRefresh.Connect("activate", func() {
 		sp.LoadDirectory(sp.client.CurrentDir())
 	})
@@ -597,19 +598,19 @@ func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 func (sp *SFTPPanel) showEmptyAreaContextMenu(eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
-	mUpload, _ := gtk.MenuItemNewWithLabel("Выгрузить файл на сервер (Upload)...")
+	mUpload, _ := gtk.MenuItemNewWithLabel(i18n.T("Выгрузить файл на сервер (Upload)...", "Upload file to server..."))
 	mUpload.Connect("activate", func() {
 		sp.showUploadFileChooser()
 	})
 	menu.Append(mUpload)
 
-	mMkdir, _ := gtk.MenuItemNewWithLabel("Создать новую папку (F7)...")
+	mMkdir, _ := gtk.MenuItemNewWithLabel(i18n.T("Создать новую папку (F7)...", "Create new folder (F7)..."))
 	mMkdir.Connect("activate", func() {
 		sp.showCreateFolderDialog()
 	})
 	menu.Append(mMkdir)
 
-	mRefresh, _ := gtk.MenuItemNewWithLabel("Обновить каталог (F5)")
+	mRefresh, _ := gtk.MenuItemNewWithLabel(i18n.T("Обновить каталог (F5)", "Refresh directory (F5)"))
 	mRefresh.Connect("activate", func() {
 		sp.LoadDirectory(sp.client.CurrentDir())
 	})

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/darakcheeff/pac/internal/i18n"
+
 	"github.com/darakcheeff/pac/internal/storage"
 )
 
@@ -84,6 +86,6 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 
 // FormatRestoredHistoryHeader formats separator string for restored history buffer
 func FormatRestoredHistoryHeader(savedAt time.Time) string {
-	return fmt.Sprintf("\r\n\x1b[1;33m--- [Восстановленная история сессии: %s] ---\x1b[0m\r\n\r\n",
+	return i18n.Tf("\r\n\x1b[1;33m--- [Восстановленная история сессии: %s] ---\x1b[0m\r\n\r\n", "\r\n\x1b[1;33m--- [Restored session history: %s] ---\x1b[0m\r\n\r\n",
 		savedAt.Format("2006-01-02 15:04:05"))
 }

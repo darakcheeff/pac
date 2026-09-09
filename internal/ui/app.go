@@ -11,6 +11,7 @@ import (
 	"github.com/darakcheeff/pac/internal/engine/pty"
 	engineSSH "github.com/darakcheeff/pac/internal/engine/ssh"
 	"github.com/darakcheeff/pac/internal/engine/watcher"
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/migration"
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/storage"
@@ -206,7 +207,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	// 5. StatusBar
 	statusBar, _ := gtk.StatusbarNew()
-	statusLabel, _ := gtk.LabelNew("Готово к работе")
+	statusLabel, _ := gtk.LabelNew(i18n.T("Готово к работе", "Ready"))
 	statusLabel.SetMarginStart(8)
 	statusBar.PackStart(statusLabel, false, false, 0)
 	mainBox.PackEnd(statusBar, false, false, 0)
@@ -260,7 +261,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 			}
 			if n > 0 {
 				app.HostTree.Reload()
-				app.StatusLabel.SetText(fmt.Sprintf("Импортировано %d хостов из старого Ásbrú", n))
+				app.StatusLabel.SetText(i18n.Tf("Импортировано %d хостов из старого Ásbrú", "Imported %d hosts from old Ásbrú", n))
 			}
 
 			// Restore saved sessions
@@ -280,11 +281,11 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 func (app *AppWindow) setupMenuAndToolbar() {
 	// --- Menus ---
 	// File Menu
-	mFile, _ := gtk.MenuItemNewWithMnemonic("_Файл")
+	mFile, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Файл", "_File"))
 	fileMenu, _ := gtk.MenuNew()
 	mFile.SetSubmenu(fileMenu)
 
-	mNewHost, _ := gtk.MenuItemNewWithLabel("Новое подключение...")
+	mNewHost, _ := gtk.MenuItemNewWithLabel(i18n.T("Новое подключение...", "New Connection..."))
 	mNewHost.Connect("activate", func() {
 		dialogs.ShowHostEditorDialog(app.Window, app.store, nil, "root", func(h *storage.Host) {
 			app.HostTree.Reload()
@@ -292,7 +293,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	fileMenu.Append(mNewHost)
 
-	mQuickConnect, _ := gtk.MenuItemNewWithLabel("Быстрое подключение...")
+	mQuickConnect, _ := gtk.MenuItemNewWithLabel(i18n.T("Быстрое подключение...", "Quick Connect..."))
 	mQuickConnect.Connect("activate", func() {
 		dialogs.ShowQuickConnectDialog(app.Window, func(h *storage.Host) {
 			app.ConnectToHost(h)
@@ -300,12 +301,12 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	fileMenu.Append(mQuickConnect)
 
-	mImportOld, _ := gtk.MenuItemNewWithLabel("Импорт из Ásbrú v6 (asbru.conf)...")
+	mImportOld, _ := gtk.MenuItemNewWithLabel(i18n.T("Импорт из Ásbrú v6 (asbru.conf)...", "Import from Ásbrú v6 (asbru.conf)..."))
 	mImportOld.Connect("activate", func() {
 		n, err := migration.MigrateOldConfig(app.store, "")
 		if err == nil {
 			app.HostTree.Reload()
-			app.StatusLabel.SetText(fmt.Sprintf("Успешно импортировано %d сессий", n))
+			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий", "Successfully imported %d sessions", n))
 		}
 	})
 	fileMenu.Append(mImportOld)
@@ -313,7 +314,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	sep1, _ := gtk.SeparatorMenuItemNew()
 	fileMenu.Append(sep1)
 
-	mQuit, _ := gtk.MenuItemNewWithLabel("Выход")
+	mQuit, _ := gtk.MenuItemNewWithLabel(i18n.T("Выход", "Quit"))
 	mQuit.Connect("activate", func() {
 		app.Quit()
 	})
@@ -321,11 +322,11 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.MenuBar.Append(mFile)
 
 	// Edit Menu
-	mEdit, _ := gtk.MenuItemNewWithMnemonic("_Правка")
+	mEdit, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Правка", "_Edit"))
 	editMenu, _ := gtk.MenuNew()
 	mEdit.SetSubmenu(editMenu)
 
-	mGlobalSearch, _ := gtk.MenuItemNewWithLabel("Глобальный поиск по всем сессиям")
+	mGlobalSearch, _ := gtk.MenuItemNewWithLabel(i18n.T("Глобальный поиск по всем сессиям", "Global Search across all sessions"))
 	mGlobalSearch.Connect("activate", func() {
 		ShowGlobalSearchDialog(app.Window, app.manager, func(sessionID string) {
 			// Select tab
@@ -335,13 +336,13 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.MenuBar.Append(mEdit)
 
 	// View Menu
-	mView, _ := gtk.MenuItemNewWithMnemonic("_Вид")
+	mView, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Вид", "_View"))
 	viewMenu, _ := gtk.MenuNew()
 	mView.SetSubmenu(viewMenu)
 
 
 
-	mToggleSFTP, _ := gtk.CheckMenuItemNewWithLabel("SFTP файловый менеджер")
+	mToggleSFTP, _ := gtk.CheckMenuItemNewWithLabel(i18n.T("SFTP файловый менеджер", "SFTP File Manager"))
 	mToggleSFTP.SetActive(true)
 	mToggleSFTP.Connect("toggled", func() {
 		if mToggleSFTP.GetActive() {
@@ -352,7 +353,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	viewMenu.Append(mToggleSFTP)
 
-	mToggleBroadcast, _ := gtk.CheckMenuItemNewWithLabel("Панель кластерного ввода")
+	mToggleBroadcast, _ := gtk.CheckMenuItemNewWithLabel(i18n.T("Панель кластерного ввода", "Cluster Input Bar"))
 	mToggleBroadcast.Connect("toggled", func() {
 		if mToggleBroadcast.GetActive() {
 			app.BroadcastBar.Box.Show()
@@ -363,7 +364,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	viewMenu.Append(mToggleBroadcast)
 
-	mToggleNotes, _ := gtk.MenuItemNewWithLabel("Панель заметок")
+	mToggleNotes, _ := gtk.MenuItemNewWithLabel(i18n.T("Панель заметок", "Notes Panel"))
 	mToggleNotes.Connect("activate", func() {
 		app.ToggleNotesPanel()
 	})
@@ -372,11 +373,11 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.MenuBar.Append(mView)
 
 	// Sessions Menu
-	mSessions, _ := gtk.MenuItemNewWithMnemonic("_Сессии")
+	mSessions, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Сессии", "_Sessions"))
 	sessMenu, _ := gtk.MenuNew()
 	mSessions.SetSubmenu(sessMenu)
 
-	mSplitHoriz, _ := gtk.MenuItemNewWithLabel("Разделить экран по горизонтали")
+	mSplitHoriz, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить экран по горизонтали", "Split Screen Horizontally"))
 	mSplitHoriz.Connect("activate", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -385,7 +386,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	sessMenu.Append(mSplitHoriz)
 
-	mSplitVert, _ := gtk.MenuItemNewWithLabel("Разделить экран по вертикали")
+	mSplitVert, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить экран по вертикали", "Split Screen Vertically"))
 	mSplitVert.Connect("activate", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -394,7 +395,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	sessMenu.Append(mSplitVert)
 
-	mUnsplit, _ := gtk.MenuItemNewWithLabel("Разгруппировать сплит в новую вкладку")
+	mUnsplit, _ := gtk.MenuItemNewWithLabel(i18n.T("Разгруппировать сплит в новую вкладку", "Unsplit to New Tab"))
 	mUnsplit.Connect("activate", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -407,9 +408,9 @@ func (app *AppWindow) setupMenuAndToolbar() {
 
 	// --- ToolBar Buttons with standard icons & rich tooltips ---
 	// 1. New Connection
-	btnNew, _ := gtk.ToolButtonNew(nil, "Новое подключение")
+	btnNew, _ := gtk.ToolButtonNew(nil, i18n.T("Новое подключение", "New Connection"))
 	btnNew.SetIconName("tab-new-symbolic")
-	btnNew.SetTooltipText("Создать новое подключение к серверу (SSH, Telnet, Serial, Local)")
+	btnNew.SetTooltipText(i18n.T("Создать новое подключение к серверу (SSH, Telnet, Serial, Local)", "Create new connection (SSH, Telnet, Serial, Local)"))
 	btnNew.Connect("clicked", func() {
 		dialogs.ShowHostEditorDialog(app.Window, app.store, nil, "root", func(h *storage.Host) {
 			app.HostTree.Reload()
@@ -418,9 +419,9 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.ToolBar.Insert(btnNew, -1)
 
 	// 2. Quick Connect
-	btnQuick, _ := gtk.ToolButtonNew(nil, "Быстрое подключение")
+	btnQuick, _ := gtk.ToolButtonNew(nil, i18n.T("Быстрое подключение", "Quick Connect"))
 	btnQuick.SetIconName("network-wired-symbolic")
-	btnQuick.SetTooltipText("Быстрое подключение к хосту без предварительного сохранения")
+	btnQuick.SetTooltipText(i18n.T("Быстрое подключение к хосту без предварительного сохранения", "Quick connect without saving host"))
 	btnQuick.Connect("clicked", func() {
 		dialogs.ShowQuickConnectDialog(app.Window, func(h *storage.Host) {
 			app.ConnectToHost(h)
@@ -432,8 +433,8 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.ToolBar.Insert(sepTool1, -1)
 
 	// 3. Split Horizontal (Top / Bottom)
-	btnSplitH, _ := gtk.ToolButtonNew(GetSplitHorizontalImage(), "Разделить горизонтально")
-	btnSplitH.SetTooltipText("Разделить экран по горизонтали (сверху и снизу)")
+	btnSplitH, _ := gtk.ToolButtonNew(GetSplitHorizontalImage(), i18n.T("Разделить горизонтально", "Split Horizontally"))
+	btnSplitH.SetTooltipText(i18n.T("Разделить экран по горизонтали (сверху и снизу)", "Split screen horizontally (top / bottom)"))
 	btnSplitH.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -447,8 +448,8 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.ToolBar.Insert(btnSplitH, -1)
 
 	// 4. Split Vertical (Left / Right)
-	btnSplitV, _ := gtk.ToolButtonNew(GetSplitVerticalImage(), "Разделить вертикально")
-	btnSplitV.SetTooltipText("Разделить экран по вертикали (слева и справа)")
+	btnSplitV, _ := gtk.ToolButtonNew(GetSplitVerticalImage(), i18n.T("Разделить вертикально", "Split Vertically"))
+	btnSplitV.SetTooltipText(i18n.T("Разделить экран по вертикали (слева и справа)", "Split screen vertically (left / right)"))
 	btnSplitV.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
 		if tab != nil {
@@ -465,9 +466,9 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.ToolBar.Insert(sepTool2, -1)
 
 	// 5. Broadcast / Cluster Input
-	btnBroadcast, _ := gtk.ToolButtonNew(nil, "Кластерный ввод")
+	btnBroadcast, _ := gtk.ToolButtonNew(nil, i18n.T("Кластерный ввод", "Cluster Input"))
 	btnBroadcast.SetIconName("input-keyboard-symbolic")
-	btnBroadcast.SetTooltipText("Кластерный ввод: одновременная трансляция команд во все открытые вкладки")
+	btnBroadcast.SetTooltipText(i18n.T("Кластерный ввод: одновременная трансляция команд во все открытые вкладки", "Cluster input: broadcast commands to all open tabs"))
 	btnBroadcast.Connect("clicked", func() {
 		if app.BroadcastBar.Box.IsVisible() {
 			app.BroadcastBar.Box.Hide()
@@ -479,18 +480,18 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	app.ToolBar.Insert(btnBroadcast, -1)
 
 	// 6. Global Search
-	btnSearch, _ := gtk.ToolButtonNew(nil, "Поиск по всем сессиям")
+	btnSearch, _ := gtk.ToolButtonNew(nil, i18n.T("Поиск по всем сессиям", "Global Search"))
 	btnSearch.SetIconName("edit-find-symbolic")
-	btnSearch.SetTooltipText("Глобальный поиск текста по всем открытым сессиям и вкладкам")
+	btnSearch.SetTooltipText(i18n.T("Глобальный поиск текста по всем открытым сессиям и вкладкам", "Global text search across all open sessions and tabs"))
 	btnSearch.Connect("clicked", func() {
 		ShowGlobalSearchDialog(app.Window, app.manager, nil)
 	})
 	app.ToolBar.Insert(btnSearch, -1)
 
 	// 7. Toggle Notes Panel
-	btnNotes, _ := gtk.ToolButtonNew(nil, "Заметки")
+	btnNotes, _ := gtk.ToolButtonNew(nil, i18n.T("Заметки", "Notes"))
 	btnNotes.SetIconName("x-office-document-symbolic")
-	btnNotes.SetTooltipText("Показать / скрыть панель заметок")
+	btnNotes.SetTooltipText(i18n.T("Показать / скрыть панель заметок", "Show / hide notes panel"))
 	btnNotes.Connect("clicked", func() {
 		app.ToggleNotesPanel()
 	})
@@ -540,7 +541,7 @@ func (app *AppWindow) setupSignals() {
 		g := &storage.Group{
 			ID:       fmt.Sprintf("grp-%d", time.Now().UnixNano()),
 			ParentID: parentGroupID,
-			Name:     "Новая папка",
+			Name:     i18n.T("Новая папка", "New Folder"),
 			Icon:     "folder",
 		}
 		_ = app.store.SaveGroup(g)
@@ -554,7 +555,7 @@ func (app *AppWindow) setupSignals() {
 				app.SFTPPanel.AttachClient(sess.Host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 			}
 			if sess.Host != nil {
-				app.StatusLabel.SetText(fmt.Sprintf("Сессия: %s (%s) | Протокол: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
+				app.StatusLabel.SetText(i18n.Tf("Сессия: %s (%s) | Протокол: %s", "Session: %s (%s) | Protocol: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
 			}
 		}
 	}
@@ -612,11 +613,11 @@ func (app *AppWindow) setupSignals() {
 			return
 		}
 		dlg, err := gtk.FileChooserDialogNewWith2Buttons(
-			"Сохранить журнал сессии",
+			i18n.T("Сохранить журнал сессии", "Save Session Log"),
 			app.Window,
 			gtk.FILE_CHOOSER_ACTION_SAVE,
-			"Отмена", gtk.RESPONSE_CANCEL,
-			"Сохранить", gtk.RESPONSE_ACCEPT,
+			i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+			i18n.T("Сохранить", "Save"), gtk.RESPONSE_ACCEPT,
 		)
 		if err != nil {
 			return
@@ -626,7 +627,7 @@ func (app *AppWindow) setupSignals() {
 		if dlg.Run() == gtk.RESPONSE_ACCEPT {
 			filename := dlg.GetFilename()
 			_ = os.WriteFile(filename, []byte(sess.GetScrollbackText()), 0644)
-			app.StatusLabel.SetText("Журнал сохранен: " + filename)
+			app.StatusLabel.SetText(i18n.T("Журнал сохранен: ", "Log saved: ") + filename)
 		}
 	}
 
@@ -682,16 +683,16 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 	}
 
 	log.Printf("[APP] Splitting tab %q for host %s (vertical=%v)", tab.Session.Title, targetHost.Name, vertical)
-	app.StatusLabel.SetText("Разделение экрана...")
+	app.StatusLabel.SetText(i18n.T("Разделение экрана...", "Splitting screen..."))
 
 	term, err := vte.NewTerminal()
 	if err != nil {
-		app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
+		app.StatusLabel.SetText(i18n.T("Ошибка создания VTE виджета: ", "Error creating VTE widget: ") + err.Error())
 		return
 	}
 	slaveFile, err := term.SetupNativePTY()
 	if err != nil {
-		app.StatusLabel.SetText("Ошибка инициализации PTY: " + err.Error())
+		app.StatusLabel.SetText(i18n.T("Ошибка инициализации PTY: ", "Error initializing PTY: ") + err.Error())
 		return
 	}
 
@@ -708,10 +709,10 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 
 	bridge := pty.FromSlave(slaveFile)
 	go func() {
-		newSess, err := session.StartSessionWithBridge(context.Background(), targetHost, tab.Session.Title+" [сплит]", app.settings.DefaultLogsDir, bridge, nil)
+		newSess, err := session.StartSessionWithBridge(context.Background(), targetHost, tab.Session.Title+i18n.T(" [сплит]", " [split]"), app.settings.DefaultLogsDir, bridge, nil)
 		glib.IdleAdd(func() {
 			if err != nil {
-				app.StatusLabel.SetText("Ошибка создания сплита: " + err.Error())
+				app.StatusLabel.SetText(i18n.T("Ошибка создания сплита: ", "Error creating split: ") + err.Error())
 				log.Printf("[APP] ERROR creating split session: %v", err)
 				return
 			}
@@ -726,7 +727,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			if err != nil {
 				log.Printf("[APP] ERROR in SplitActiveTab: %v", err)
 			} else {
-				app.StatusLabel.SetText("Экран успешно разделен")
+				app.StatusLabel.SetText(i18n.T("Экран успешно разделен", "Screen split successfully"))
 				log.Printf("[APP] Split created successfully")
 			}
 
@@ -740,18 +741,18 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 // ConnectToHost opens a new session and attaches it to a new tab
 func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	log.Printf("[APP] ConnectToHost initiated for: %s (%s:%d, proto=%s)", host.Name, host.Host, host.Port, host.Protocol)
-	app.StatusLabel.SetText("Подключение к " + host.Host + "...")
+	app.StatusLabel.SetText(i18n.Tf("Подключение к %s...", "Connecting to %s...", host.Host))
 
 	term, err := vte.NewTerminal()
 	if err != nil {
-		app.StatusLabel.SetText("Ошибка создания VTE виджета: " + err.Error())
+		app.StatusLabel.SetText(i18n.T("Ошибка создания VTE виджета: ", "Error creating VTE widget: ") + err.Error())
 		log.Printf("[APP] ERROR creating VTE terminal: %v", err)
 		return
 	}
 
 	slaveFile, err := term.SetupNativePTY()
 	if err != nil {
-		app.StatusLabel.SetText("Ошибка инициализации PTY: " + err.Error())
+		app.StatusLabel.SetText(i18n.T("Ошибка инициализации PTY: ", "Error initializing PTY: ") + err.Error())
 		log.Printf("[APP] ERROR initializing native PTY: %v", err)
 		return
 	}
@@ -788,7 +789,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 		sess, err := session.StartSessionWithBridge(context.Background(), host, host.Name, app.settings.DefaultLogsDir, bridge, jumpClient)
 		glib.IdleAdd(func() {
 			if err != nil {
-				app.StatusLabel.SetText("Ошибка подключения: " + err.Error())
+				app.StatusLabel.SetText(i18n.T("Ошибка подключения: ", "Connection error: ") + err.Error())
 				log.Printf("[APP] ERROR connecting to host %s: %v", host.Name, err)
 				return
 			}
@@ -808,7 +809,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 				app.SFTPPanel.AttachClient(host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 			}
 
-			app.StatusLabel.SetText(fmt.Sprintf("Подключено: %s (%s)", host.Name, host.Host))
+			app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
 			log.Printf("[APP] Successfully connected and opened tab for: %s (sessionID=%s)", host.Name, sess.ID)
 
 			if app.settings.AutoRestoreSessions {
@@ -830,7 +831,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 	}
 
 	log.Printf("[RESTORE] Restoring %d saved session(s)...", len(savedSessions))
-	app.StatusLabel.SetText(fmt.Sprintf("Восстановление %d сессий...", len(savedSessions)))
+	app.StatusLabel.SetText(i18n.Tf("Восстановление %d сессий...", "Restoring %d sessions...", len(savedSessions)))
 
 	// Group sessions by TabIndex
 	type tabGroup struct {

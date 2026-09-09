@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -66,9 +67,9 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 
 	dlg, _ := gtk.DialogNew()
 	if isNew {
-		dlg.SetTitle("Новое подключение")
+		dlg.SetTitle(i18n.T("Новое подключение", "New Connection"))
 	} else {
-		dlg.SetTitle("Свойства: " + host.Name)
+		dlg.SetTitle(i18n.Tf("Свойства: %s", "Properties: %s", host.Name))
 	}
 	dlg.SetTransientFor(parent)
 	dlg.SetModal(true)
@@ -88,7 +89,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	topGrid.SetColumnSpacing(8)
 
 	// 1. Name
-	lblName, _ := gtk.LabelNew("Название:")
+	lblName, _ := gtk.LabelNew(i18n.T("Название:", "Name:"))
 	lblName.SetHAlign(gtk.ALIGN_END)
 	entryName, _ := gtk.EntryNew()
 	entryName.SetText(host.Name)
@@ -97,11 +98,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	topGrid.Attach(entryName, 1, 0, 1, 1)
 
 	// 2. Group
-	lblGroup, _ := gtk.LabelNew("Папка / Группа:")
+	lblGroup, _ := gtk.LabelNew(i18n.T("Папка / Группа:", "Folder / Group:"))
 	lblGroup.SetHAlign(gtk.ALIGN_END)
 	comboGroup, _ := gtk.ComboBoxTextNew()
 	for _, g := range allGroups {
-		comboGroup.Append(g.ID, g.Name)
+		gName := g.Name
+		if g.ID == "root" {
+			gName = i18n.T("Все подключения", "All Connections")
+		}
+		comboGroup.Append(g.ID, gName)
 	}
 	if host.GroupID != "" {
 		comboGroup.SetActiveID(host.GroupID)
@@ -112,19 +117,19 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	topGrid.Attach(comboGroup, 1, 1, 1, 1)
 
 	// 3. Protocol
-	lblProto, _ := gtk.LabelNew("Протокол:")
+	lblProto, _ := gtk.LabelNew(i18n.T("Протокол:", "Protocol:"))
 	lblProto.SetHAlign(gtk.ALIGN_END)
 	comboProto, _ := gtk.ComboBoxTextNew()
 	comboProto.Append("ssh", "SSH (Secure Shell)")
 	comboProto.Append("telnet", "Telnet")
-	comboProto.Append("serial", "Serial / COM-порт")
-	comboProto.Append("local", "Локальный терминал")
+	comboProto.Append("serial", i18n.T("Serial / COM-порт", "Serial / COM Port"))
+	comboProto.Append("local", i18n.T("Локальный терминал", "Local Terminal"))
 	comboProto.SetActiveID(string(host.Protocol))
 	topGrid.Attach(lblProto, 0, 2, 1, 1)
 	topGrid.Attach(comboProto, 1, 2, 1, 1)
 
 	// 4. Description
-	lblDesc, _ := gtk.LabelNew("Описание:")
+	lblDesc, _ := gtk.LabelNew(i18n.T("Описание:", "Description:"))
 	lblDesc.SetHAlign(gtk.ALIGN_END)
 	entryDesc, _ := gtk.EntryNew()
 	entryDesc.SetText(host.Description)
@@ -148,7 +153,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.SetMarginBottom(12)
 
 	// Network: Host / IP
-	lblHost, _ := gtk.LabelNew("Хост / IP-адрес:")
+	lblHost, _ := gtk.LabelNew(i18n.T("Хост / IP-адрес:", "Host / IP Address:"))
 	lblHost.SetHAlign(gtk.ALIGN_END)
 	entryHost, _ := gtk.EntryNew()
 	entryHost.SetText(host.Host)
@@ -157,7 +162,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(entryHost, 1, 0, 2, 1)
 
 	// Network: Port
-	lblPort, _ := gtk.LabelNew("Порт:")
+	lblPort, _ := gtk.LabelNew(i18n.T("Порт:", "Port:"))
 	lblPort.SetHAlign(gtk.ALIGN_END)
 	entryPort, _ := gtk.EntryNew()
 	if host.Port > 0 {
@@ -169,7 +174,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(entryPort, 1, 1, 1, 1)
 
 	// Serial: Port Device
-	lblSerialPort, _ := gtk.LabelNew("COM-устройство:")
+	lblSerialPort, _ := gtk.LabelNew(i18n.T("COM-устройство:", "COM Device:"))
 	lblSerialPort.SetHAlign(gtk.ALIGN_END)
 	comboSerialPort, _ := gtk.ComboBoxTextNewWithEntry()
 	availPorts := scanSerialPorts()
@@ -187,7 +192,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(comboSerialPort, 1, 2, 2, 1)
 
 	// Serial: Baud Rate
-	lblBaud, _ := gtk.LabelNew("Скорость (Baud Rate):")
+	lblBaud, _ := gtk.LabelNew(i18n.T("Скорость (Baud Rate):", "Baud Rate:"))
 	lblBaud.SetHAlign(gtk.ALIGN_END)
 	comboBaud, _ := gtk.ComboBoxTextNew()
 	for _, b := range []int{9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600} {
@@ -202,7 +207,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(comboBaud, 1, 3, 1, 1)
 
 	// Serial: Data Bits
-	lblDataBits, _ := gtk.LabelNew("Биты данных:")
+	lblDataBits, _ := gtk.LabelNew(i18n.T("Биты данных:", "Data Bits:"))
 	lblDataBits.SetHAlign(gtk.ALIGN_END)
 	comboDataBits, _ := gtk.ComboBoxTextNew()
 	for _, d := range []int{5, 6, 7, 8} {
@@ -217,7 +222,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(comboDataBits, 1, 4, 1, 1)
 
 	// Serial: Stop Bits
-	lblStopBits, _ := gtk.LabelNew("Стоп-биты:")
+	lblStopBits, _ := gtk.LabelNew(i18n.T("Стоп-биты:", "Stop Bits:"))
 	lblStopBits.SetHAlign(gtk.ALIGN_END)
 	comboStopBits, _ := gtk.ComboBoxTextNew()
 	comboStopBits.Append("1", "1")
@@ -232,12 +237,12 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(comboStopBits, 1, 5, 1, 1)
 
 	// Serial: Parity
-	lblParity, _ := gtk.LabelNew("Чётность (Parity):")
+	lblParity, _ := gtk.LabelNew(i18n.T("Чётность (Parity):", "Parity:"))
 	lblParity.SetHAlign(gtk.ALIGN_END)
 	comboParity, _ := gtk.ComboBoxTextNew()
-	comboParity.Append("none", "None (Нет)")
-	comboParity.Append("even", "Even (Чёт)")
-	comboParity.Append("odd", "Odd (Нечёт)")
+	comboParity.Append("none", i18n.T("None (Нет)", "None"))
+	comboParity.Append("even", i18n.T("Even (Чёт)", "Even"))
+	comboParity.Append("odd", i18n.T("Odd (Нечёт)", "Odd"))
 	comboParity.Append("mark", "Mark")
 	comboParity.Append("space", "Space")
 	curParity := host.SerialParity
@@ -249,7 +254,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(comboParity, 1, 6, 1, 1)
 
 	// Local Shell: Command
-	lblShell, _ := gtk.LabelNew("Командная оболочка:")
+	lblShell, _ := gtk.LabelNew(i18n.T("Командная оболочка:", "Command Shell:"))
 	lblShell.SetHAlign(gtk.ALIGN_END)
 	entryShell, _ := gtk.EntryNew()
 	defShell := os.Getenv("SHELL")
@@ -265,7 +270,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(entryShell, 1, 7, 2, 1)
 
 	// Local Shell: Working Directory
-	lblWorkDir, _ := gtk.LabelNew("Рабочая папка:")
+	lblWorkDir, _ := gtk.LabelNew(i18n.T("Рабочая папка:", "Working Directory:"))
 	lblWorkDir.SetHAlign(gtk.ALIGN_END)
 	entryWorkDir, _ := gtk.EntryNew()
 	entryWorkDir.SetText(host.Notes)
@@ -277,11 +282,11 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	btnBrowseWorkDir.SetTooltipText("Выбрать рабочую папку...")
 	btnBrowseWorkDir.Connect("clicked", func() {
 		fc, _ := gtk.FileChooserDialogNewWith2Buttons(
-			"Выберите рабочую папку",
+			i18n.T("Выберите рабочую папку", "Select Working Directory"),
 			parent,
 			gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
-			"Отмена", gtk.RESPONSE_CANCEL,
-			"Выбрать", gtk.RESPONSE_ACCEPT,
+			i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+			i18n.T("Выбрать", "Select"), gtk.RESPONSE_ACCEPT,
 		)
 		if fc.Run() == gtk.RESPONSE_ACCEPT {
 			entryWorkDir.SetText(fc.GetFilename())
@@ -292,7 +297,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(entryWorkDir, 1, 8, 1, 1)
 	gridNet.Attach(btnBrowseWorkDir, 2, 8, 1, 1)
 
-	tabNetLabel := createTabLabel("Параметры соединения")
+	tabNetLabel := createTabLabel(i18n.T("Параметры соединения", "Connection Parameters"))
 	notebook.AppendPage(gridNet, tabNetLabel)
 
 	// --- Tab 2: Authentication (SSH & Telnet) ---
@@ -305,7 +310,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridAuth.SetMarginBottom(12)
 
 	// Username
-	lblUser, _ := gtk.LabelNew("Имя пользователя:")
+	lblUser, _ := gtk.LabelNew(i18n.T("Имя пользователя:", "Username:"))
 	lblUser.SetHAlign(gtk.ALIGN_END)
 	entryUser, _ := gtk.EntryNew()
 	entryUser.SetText(host.Username)
@@ -314,13 +319,13 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridAuth.Attach(entryUser, 1, 0, 2, 1)
 
 	// Auth Method
-	lblAuthM, _ := gtk.LabelNew("Метод авторизации:")
+	lblAuthM, _ := gtk.LabelNew(i18n.T("Метод авторизации:", "Auth Method:"))
 	lblAuthM.SetHAlign(gtk.ALIGN_END)
 	comboAuthM, _ := gtk.ComboBoxTextNew()
-	comboAuthM.Append("password", "Пароль (Password)")
-	comboAuthM.Append("key", "Приватный SSH-ключ (Private Key)")
+	comboAuthM.Append("password", i18n.T("Пароль (Password)", "Password"))
+	comboAuthM.Append("key", i18n.T("Приватный SSH-ключ (Private Key)", "Private Key"))
 	comboAuthM.Append("agent", "SSH Agent (SSH_AUTH_SOCK)")
-	comboAuthM.Append("keyboard-interactive", "Интерактивный ввод в терминале")
+	comboAuthM.Append("keyboard-interactive", i18n.T("Интерактивный ввод в терминале", "Keyboard Interactive"))
 	curAuth := string(host.AuthMethod)
 	if curAuth == "" {
 		curAuth = "password"
@@ -330,13 +335,13 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridAuth.Attach(comboAuthM, 1, 1, 2, 1)
 
 	// Password
-	lblPass, _ := gtk.LabelNew("Пароль:")
+	lblPass, _ := gtk.LabelNew(i18n.T("Пароль:", "Password:"))
 	lblPass.SetHAlign(gtk.ALIGN_END)
 	entryPass, _ := gtk.EntryNew()
 	entryPass.SetVisibility(false)
 	entryPass.SetText(host.Password)
 	btnTogglePass, _ := gtk.ButtonNewFromIconName("eye-open-negative-filled-symbolic", gtk.ICON_SIZE_BUTTON)
-	btnTogglePass.SetTooltipText("Показать / Скрыть пароль")
+	btnTogglePass.SetTooltipText(i18n.T("Показать / Скрыть пароль", "Show / Hide Password"))
 	btnTogglePass.Connect("clicked", func() {
 		entryPass.SetVisibility(!entryPass.GetVisibility())
 	})
@@ -345,19 +350,19 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridAuth.Attach(btnTogglePass, 2, 2, 1, 1)
 
 	// Key Path
-	lblKey, _ := gtk.LabelNew("Файл SSH-ключа:")
+	lblKey, _ := gtk.LabelNew(i18n.T("Файл SSH-ключа:", "SSH Key File:"))
 	lblKey.SetHAlign(gtk.ALIGN_END)
 	entryKey, _ := gtk.EntryNew()
 	entryKey.SetText(host.KeyPath)
 	btnBrowseKey, _ := gtk.ButtonNewFromIconName("document-open-symbolic", gtk.ICON_SIZE_BUTTON)
-	btnBrowseKey.SetTooltipText("Выбрать файл закрытого ключа...")
+	btnBrowseKey.SetTooltipText(i18n.T("Выбрать файл закрытого ключа...", "Select Private Key File..."))
 	btnBrowseKey.Connect("clicked", func() {
 		fc, _ := gtk.FileChooserDialogNewWith2Buttons(
-			"Выберите файл закрытого ключа SSH",
+			i18n.T("Выберите файл закрытого ключа SSH", "Select SSH Private Key File"),
 			parent,
 			gtk.FILE_CHOOSER_ACTION_OPEN,
-			"Отмена", gtk.RESPONSE_CANCEL,
-			"Выбрать", gtk.RESPONSE_ACCEPT,
+			i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+			i18n.T("Выбрать", "Select"), gtk.RESPONSE_ACCEPT,
 		)
 		if fc.Run() == gtk.RESPONSE_ACCEPT {
 			entryKey.SetText(fc.GetFilename())
@@ -369,7 +374,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridAuth.Attach(btnBrowseKey, 2, 3, 1, 1)
 
 	// Key Passphrase
-	lblKeyPass, _ := gtk.LabelNew("Пароль к ключу:")
+	lblKeyPass, _ := gtk.LabelNew(i18n.T("Пароль к ключу:", "Key Passphrase:"))
 	lblKeyPass.SetHAlign(gtk.ALIGN_END)
 	entryKeyPass, _ := gtk.EntryNew()
 	entryKeyPass.SetVisibility(false)
@@ -377,7 +382,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridAuth.Attach(lblKeyPass, 0, 4, 1, 1)
 	gridAuth.Attach(entryKeyPass, 1, 4, 2, 1)
 
-	tabAuthLabel := createTabLabel("Авторизация")
+	tabAuthLabel := createTabLabel(i18n.T("Авторизация", "Authentication"))
 	notebook.AppendPage(gridAuth, tabAuthLabel)
 
 	// --- Tab 3: ProxyJump & Network Advanced (SSH) ---
@@ -392,7 +397,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	lblSelectJump, _ := gtk.LabelNew("Bastion / ProxyJump:")
 	lblSelectJump.SetHAlign(gtk.ALIGN_END)
 	comboJumpHosts, _ := gtk.ComboBoxTextNew()
-	comboJumpHosts.Append("none", "-- Без промежуточного хоста (Прямое подключение) --")
+	comboJumpHosts.Append("none", i18n.T("-- Без промежуточного хоста (Прямое подключение) --", "-- Direct Connection (No Jump) --"))
 	comboJumpHosts.SetActiveID("none")
 
 	for _, h := range allHosts {
@@ -406,15 +411,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridJump.Attach(lblSelectJump, 0, 0, 1, 1)
 	gridJump.Attach(comboJumpHosts, 1, 0, 1, 1)
 
-	chkX11, _ := gtk.CheckButtonNewWithLabel("Проброс графики X11 Forwarding (-X)")
+	chkX11, _ := gtk.CheckButtonNewWithLabel(i18n.T("Проброс графики X11 Forwarding (-X)", "X11 Forwarding (-X)"))
 	chkX11.SetActive(host.X11Forwarding)
 	gridJump.Attach(chkX11, 1, 1, 1, 1)
 
-	chkSFTP, _ := gtk.CheckButtonNewWithLabel("Автоматический SFTP файловый браузер (MobaXterm Style)")
+	chkSFTP, _ := gtk.CheckButtonNewWithLabel(i18n.T("Автоматический SFTP файловый браузер (MobaXterm Style)", "Automatic SFTP File Browser"))
 	chkSFTP.SetActive(host.AutoSFTP)
 	gridJump.Attach(chkSFTP, 1, 2, 1, 1)
 
-	lblKeepAlive, _ := gtk.LabelNew("KeepAlive интервал (сек):")
+	lblKeepAlive, _ := gtk.LabelNew(i18n.T("KeepAlive интервал (сек):", "KeepAlive interval (sec):"))
 	lblKeepAlive.SetHAlign(gtk.ALIGN_END)
 	spinKeepAlive, _ := gtk.SpinButtonNewWithRange(0, 3600, 5)
 	kaVal := host.SSHKeepAliveInterval
@@ -422,11 +427,11 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		kaVal = 15
 	}
 	spinKeepAlive.SetValue(float64(kaVal))
-	spinKeepAlive.SetTooltipText("Интервал отправки SSH/TCP keepalive пакетов (в секундах, 0 - выключено, по умолчанию 15)")
+	spinKeepAlive.SetTooltipText(i18n.T("Интервал отправки SSH/TCP keepalive пакетов (в секундах, 0 - выключено, по умолчанию 15)", "SSH/TCP keepalive packet interval in seconds (0 = disabled, default = 15)"))
 	gridJump.Attach(lblKeepAlive, 0, 3, 1, 1)
 	gridJump.Attach(spinKeepAlive, 1, 3, 1, 1)
 
-	tabJumpLabel := createTabLabel("Туннелирование и сеть")
+	tabJumpLabel := createTabLabel(i18n.T("Туннелирование и сеть", "Tunnels & Network"))
 	notebook.AppendPage(gridJump, tabJumpLabel)
 
 	// --- Tab 4: Terminal & Appearance ---
@@ -439,7 +444,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridTerm.SetMarginBottom(12)
 
 	// Terminal Type
-	lblTermType, _ := gtk.LabelNew("Тип эмуляции:")
+	lblTermType, _ := gtk.LabelNew(i18n.T("Тип эмуляции:", "Terminal Emulation:"))
 	lblTermType.SetHAlign(gtk.ALIGN_END)
 	comboTermType, _ := gtk.ComboBoxTextNew()
 	for _, tt := range []string{"xterm-256color", "vt100", "linux", "screen-256color", "xterm"} {
@@ -454,19 +459,19 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridTerm.Attach(comboTermType, 1, 0, 1, 1)
 
 	// Font Button
-	lblFont, _ := gtk.LabelNew("Шрифт терминала:")
+	lblFont, _ := gtk.LabelNew(i18n.T("Шрифт терминала:", "Terminal Font:"))
 	lblFont.SetHAlign(gtk.ALIGN_END)
 	curFont := host.FontName
 	if curFont == "" {
 		curFont = "Monospace 11"
 	}
 	fontBtn, _ := gtk.FontButtonNewWithFont(curFont)
-	fontBtn.SetTitle("Выберите шрифт терминала")
+	fontBtn.SetTitle(i18n.T("Выберите шрифт терминала", "Select Terminal Font"))
 	gridTerm.Attach(lblFont, 0, 1, 1, 1)
 	gridTerm.Attach(fontBtn, 1, 1, 1, 1)
 
 	// Color Scheme
-	lblScheme, _ := gtk.LabelNew("Цветовая схема:")
+	lblScheme, _ := gtk.LabelNew(i18n.T("Цветовая схема:", "Color Scheme:"))
 	lblScheme.SetHAlign(gtk.ALIGN_END)
 	comboScheme, _ := gtk.ComboBoxTextNew()
 	comboScheme.Append("mate", "MATE Terminal (Default Dark)")
@@ -484,7 +489,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridTerm.Attach(comboScheme, 1, 2, 1, 1)
 
 	// Scrollback Lines
-	lblScrollback, _ := gtk.LabelNew("Буфер прокрутки (строк):")
+	lblScrollback, _ := gtk.LabelNew(i18n.T("Буфер прокрутки (строк):", "Scrollback lines:"))
 	lblScrollback.SetHAlign(gtk.ALIGN_END)
 	curScroll := host.ScrollbackLines
 	if curScroll <= 0 {
@@ -495,7 +500,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridTerm.Attach(lblScrollback, 0, 3, 1, 1)
 	gridTerm.Attach(spinScroll, 1, 3, 1, 1)
 
-	tabTermLabel := createTabLabel("Терминал и вид")
+	tabTermLabel := createTabLabel(i18n.T("Терминал и вид", "Terminal & Appearance"))
 	notebook.AppendPage(gridTerm, tabTermLabel)
 
 	// --- Tab 5: Logging & History ---
@@ -507,11 +512,11 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridLog.SetMarginTop(12)
 	gridLog.SetMarginBottom(12)
 
-	chkLog, _ := gtk.CheckButtonNewWithLabel("Включить автоматическую запись сессии в файл лога")
+	chkLog, _ := gtk.CheckButtonNewWithLabel(i18n.T("Включить автоматическую запись сессии в файл лога", "Enable automatic session logging to file"))
 	chkLog.SetActive(host.EnableLogging)
 	gridLog.Attach(chkLog, 0, 0, 2, 1)
 
-	lblLogPath, _ := gtk.LabelNew("Шаблон пути к логу:")
+	lblLogPath, _ := gtk.LabelNew(i18n.T("Шаблон пути к логу:", "Log path template:"))
 	lblLogPath.SetHAlign(gtk.ALIGN_END)
 	entryLogPath, _ := gtk.EntryNew()
 	entryLogPath.SetPlaceholderText("~/.config/pac/logs/%H_%Y%m%d_%T.log")
@@ -519,15 +524,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridLog.Attach(lblLogPath, 0, 1, 1, 1)
 	gridLog.Attach(entryLogPath, 1, 1, 1, 1)
 
-	chkCleanANSI, _ := gtk.CheckButtonNewWithLabel("Очищать ANSI escape-последовательности из файла лога")
+	chkCleanANSI, _ := gtk.CheckButtonNewWithLabel(i18n.T("Очищать ANSI escape-последовательности из файла лога", "Strip ANSI escape sequences from log"))
 	chkCleanANSI.SetActive(host.LogCleanANSI)
 	gridLog.Attach(chkCleanANSI, 0, 2, 2, 1)
 
-	chkRestore, _ := gtk.CheckButtonNewWithLabel("Восстанавливать историю экрана при перезапуске приложения")
+	chkRestore, _ := gtk.CheckButtonNewWithLabel(i18n.T("Восстанавливать историю экрана при перезапуске приложения", "Restore terminal scrollback on startup"))
 	chkRestore.SetActive(host.RestoreHistory)
 	gridLog.Attach(chkRestore, 0, 3, 2, 1)
 
-	tabLogLabel := createTabLabel("Логирование")
+	tabLogLabel := createTabLabel(i18n.T("Логирование", "Logging"))
 	notebook.AppendPage(gridLog, tabLogLabel)
 
 	// --- Tab 6: Notes ---
@@ -546,7 +551,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	scrolledNotes.Add(textNotes)
 	notesBox.PackStart(scrolledNotes, true, true, 0)
 
-	tabNotesLabel := createTabLabel("Заметки")
+	tabNotesLabel := createTabLabel(i18n.T("Заметки", "Notes"))
 	notebook.AppendPage(notesBox, tabNotesLabel)
 
 	// --- Dynamic Protocol Visibility Switcher ---
@@ -619,8 +624,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 
 	updateProtocolVisibility()
 
-	_, _ = dlg.AddButton("Отмена", gtk.RESPONSE_CANCEL)
-	btnSave, _ := dlg.AddButton("Сохранить", gtk.RESPONSE_OK)
+	_, _ = dlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	btnSave, _ := dlg.AddButton(i18n.T("Сохранить", "Save"), gtk.RESPONSE_OK)
 	btnSave.SetCanDefault(true)
 	dlg.SetDefault(btnSave)
 

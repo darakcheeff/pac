@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/gtk"
@@ -26,25 +27,25 @@ func NewBroadcastBar(manager *session.Manager) (*BroadcastBar, error) {
 	box.SetMarginTop(4)
 	box.SetMarginBottom(4)
 
-	label, _ := gtk.LabelNew("Кластерный ввод:")
+	label, _ := gtk.LabelNew(i18n.T("Кластерный ввод:", "Cluster Input:"))
 	box.PackStart(label, false, false, 0)
 
 	combo, _ := gtk.ComboBoxTextNew()
-	combo.Append("all", "Во все открытые сессии")
+	combo.Append("all", i18n.T("Во все открытые сессии", "To all open sessions"))
 	combo.SetActiveID("all")
 	box.PackStart(combo, false, false, 0)
 
 	entry, _ := gtk.EntryNew()
-	entry.SetPlaceholderText("Введите команду и нажмите Enter для отправки...")
+	entry.SetPlaceholderText(i18n.T("Введите команду и нажмите Enter для отправки...", "Enter command and press Enter to broadcast..."))
 	entry.SetHExpand(true)
 	box.PackStart(entry, true, true, 0)
 
 	sendBtn, _ := gtk.ButtonNewFromIconName("mail-send-symbolic", gtk.ICON_SIZE_BUTTON)
-	sendBtn.SetTooltipText("Отправить команду (Enter)")
+	sendBtn.SetTooltipText(i18n.T("Отправить команду (Enter)", "Send command (Enter)"))
 	box.PackStart(sendBtn, false, false, 0)
 
 	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_BUTTON)
-	closeBtn.SetTooltipText("Скрыть панель")
+	closeBtn.SetTooltipText(i18n.T("Скрыть панель", "Close panel"))
 	box.PackEnd(closeBtn, false, false, 0)
 
 	bar := &BroadcastBar{

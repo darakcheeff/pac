@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/storage"
 	"github.com/darakcheeff/pac/internal/ui/vte"
@@ -186,7 +187,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 
 	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_MENU)
 	closeBtn.SetRelief(gtk.RELIEF_NONE)
-	closeBtn.SetTooltipText("Закрыть вкладку")
+	closeBtn.SetTooltipText(i18n.T("Закрыть вкладку", "Close tab"))
 	tabBox.PackEnd(closeBtn, false, false, 0)
 
 	eventBox.Add(tabBox)
@@ -590,7 +591,7 @@ func (tv *TabView) FindTabBySession(sess *session.Session) *TabItem {
 
 func (tv *TabView) showRenameDialog(item *TabItem) {
 	dlg, _ := gtk.DialogNew()
-	dlg.SetTitle("Переименовать вкладку")
+	dlg.SetTitle(i18n.T("Переименовать вкладку", "Rename Tab"))
 	dlg.SetModal(true)
 	dlg.SetDefaultSize(300, 100)
 
@@ -600,8 +601,8 @@ func (tv *TabView) showRenameDialog(item *TabItem) {
 	entry.SetActivatesDefault(true)
 	contentArea.Add(entry)
 
-	_, _ = dlg.AddButton("Отмена", gtk.RESPONSE_CANCEL)
-	btnOk, _ := dlg.AddButton("Сохранить", gtk.RESPONSE_OK)
+	_, _ = dlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	btnOk, _ := dlg.AddButton(i18n.T("Сохранить", "Save"), gtk.RESPONSE_OK)
 	btnOk.SetCanDefault(true)
 	dlg.SetDefault(btnOk)
 
@@ -621,7 +622,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
 	// 1. Goto TAB ▸
-	mGoto, _ := gtk.MenuItemNewWithLabel("Goto TAB")
+	mGoto, _ := gtk.MenuItemNewWithLabel(i18n.T("Перейти к вкладке", "Goto TAB"))
 	gotoSubmenu, _ := gtk.MenuNew()
 	for idx, it := range tv.items {
 		tabIdx := idx
@@ -635,15 +636,15 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mGoto)
 
 	// 2. Detach TAB to a new Window
-	mDetach, _ := gtk.MenuItemNewWithLabel("Detach TAB to a new Window")
+	mDetach, _ := gtk.MenuItemNewWithLabel(i18n.T("Открепить вкладку в новое окно", "Detach TAB to a new Window"))
 	mDetach.SetSensitive(false)
 	menu.Append(mDetach)
 
 	// 3. Split ▸
-	mSplit, _ := gtk.MenuItemNewWithLabel("Split")
+	mSplit, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить", "Split"))
 	splitSubmenu, _ := gtk.MenuNew()
 
-	mSplitV, _ := gtk.MenuItemNewWithLabel("Vertically")
+	mSplitV, _ := gtk.MenuItemNewWithLabel(i18n.T("По вертикали", "Vertically"))
 	mSplitV.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
 			sess := item.Session
@@ -655,7 +656,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	})
 	splitSubmenu.Append(mSplitV)
 
-	mSplitH, _ := gtk.MenuItemNewWithLabel("Horizontally")
+	mSplitH, _ := gtk.MenuItemNewWithLabel(i18n.T("По горизонтали", "Horizontally"))
 	mSplitH.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
 			sess := item.Session
@@ -668,7 +669,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	splitSubmenu.Append(mSplitH)
 
 	if len(item.Panes) > 1 {
-		mUnsplit, _ := gtk.MenuItemNewWithLabel("Unsplit (Merge Panes)")
+		mUnsplit, _ := gtk.MenuItemNewWithLabel(i18n.T("Объединить панели", "Unsplit (Merge Panes)"))
 		mUnsplit.Connect("activate", func() {
 			tv.UnsplitTab(item)
 		})
@@ -679,7 +680,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mSplit)
 
 	// 4. Add to Cluster
-	mAddCluster, _ := gtk.MenuItemNewWithLabel("Add to Cluster")
+	mAddCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Добавить в кластер", "Add to Cluster"))
 	mAddCluster.Connect("activate", func() {
 		if tv.OnClusterAdmin != nil {
 			tv.OnClusterAdmin()
@@ -688,12 +689,12 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mAddCluster)
 
 	// 5. Remove from Cluster
-	mRemCluster, _ := gtk.MenuItemNewWithLabel("Remove from Cluster")
+	mRemCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить из кластера", "Remove from Cluster"))
 	mRemCluster.SetSensitive(false)
 	menu.Append(mRemCluster)
 
 	// 6. Cluster Admin...
-	mClusterAdmin, _ := gtk.MenuItemNewWithLabel("Cluster Admin...")
+	mClusterAdmin, _ := gtk.MenuItemNewWithLabel(i18n.T("Управление кластерами...", "Cluster Admin..."))
 	mClusterAdmin.Connect("activate", func() {
 		if tv.OnClusterAdmin != nil {
 			tv.OnClusterAdmin()
@@ -702,7 +703,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mClusterAdmin)
 
 	// 7. Find...
-	mFind, _ := gtk.MenuItemNewWithLabel("Find...")
+	mFind, _ := gtk.MenuItemNewWithLabel(i18n.T("Поиск...", "Find..."))
 	mFind.Connect("activate", func() {
 		if tv.OnFindRequested != nil {
 			tv.OnFindRequested(item)
@@ -711,7 +712,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mFind)
 
 	// 8. Save session log...
-	mSaveLog, _ := gtk.MenuItemNewWithLabel("Save session log...")
+	mSaveLog, _ := gtk.MenuItemNewWithLabel(i18n.T("Сохранить журнал сессии...", "Save session log..."))
 	mSaveLog.Connect("activate", func() {
 		if tv.OnSaveLogRequested != nil {
 			tv.OnSaveLogRequested(item.Session)
@@ -720,7 +721,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mSaveLog)
 
 	// 9. Edit session...
-	mEditSession, _ := gtk.MenuItemNewWithLabel("Edit session...")
+	mEditSession, _ := gtk.MenuItemNewWithLabel(i18n.T("Редактировать сессию...", "Edit session..."))
 	mEditSession.Connect("activate", func() {
 		if tv.OnEditHostRequested != nil && item.Session != nil && item.Session.Host != nil {
 			tv.OnEditHostRequested(item.Session.Host)
@@ -729,14 +730,14 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mEditSession)
 
 	// 10. Temporary TAB Label change...
-	mRename, _ := gtk.MenuItemNewWithLabel("Переименовать вкладку (Rename TAB)...")
+	mRename, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать вкладку...", "Rename Tab..."))
 	mRename.Connect("activate", func() {
 		tv.showRenameDialog(item)
 	})
 	menu.Append(mRename)
 
 	// 11. New connection
-	mNewConn, _ := gtk.MenuItemNewWithLabel("New connection")
+	mNewConn, _ := gtk.MenuItemNewWithLabel(i18n.T("Новое подключение...", "New connection..."))
 	mNewConn.Connect("activate", func() {
 		if tv.OnNewConnection != nil {
 			tv.OnNewConnection()
@@ -745,7 +746,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mNewConn)
 
 	// 12. Duplicate connection
-	mDuplicate, _ := gtk.MenuItemNewWithLabel("Duplicate connection")
+	mDuplicate, _ := gtk.MenuItemNewWithLabel(i18n.T("Дублировать подключение", "Duplicate connection"))
 	mDuplicate.Connect("activate", func() {
 		if tv.OnDuplicateRequested != nil {
 			tv.OnDuplicateRequested(item.Session)
@@ -754,7 +755,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mDuplicate)
 
 	// 13. Disconnect session
-	mDisconnect, _ := gtk.MenuItemNewWithLabel("Disconnect session")
+	mDisconnect, _ := gtk.MenuItemNewWithLabel(i18n.T("Отключить сессию", "Disconnect session"))
 	mDisconnect.Connect("activate", func() {
 		if item.Session != nil {
 			_ = item.Session.Close()
@@ -763,7 +764,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mDisconnect)
 
 	// 14. Restart session
-	mRestart, _ := gtk.MenuItemNewWithLabel("Restart session")
+	mRestart, _ := gtk.MenuItemNewWithLabel(i18n.T("Перезапустить сессию", "Restart session"))
 	mRestart.Connect("activate", func() {
 		if tv.OnReconnectRequested != nil {
 			tv.OnReconnectRequested(item.Session)
@@ -772,14 +773,14 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mRestart)
 
 	// 15. Close terminal
-	mClose, _ := gtk.MenuItemNewWithLabel("Close terminal")
+	mClose, _ := gtk.MenuItemNewWithLabel(i18n.T("Закрыть терминал", "Close terminal"))
 	mClose.Connect("activate", func() {
 		tv.CloseTab(item)
 	})
 	menu.Append(mClose)
 
 	// 16. Close other terminals
-	mCloseOthers, _ := gtk.MenuItemNewWithLabel("Close other terminals")
+	mCloseOthers, _ := gtk.MenuItemNewWithLabel(i18n.T("Закрыть другие терминалы", "Close other terminals"))
 	mCloseOthers.Connect("activate", func() {
 		tv.CloseOtherTabs(item)
 	})
@@ -789,7 +790,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mCloseOthers)
 
 	// 17. Close all terminals
-	mCloseAll, _ := gtk.MenuItemNewWithLabel("Close all terminals")
+	mCloseAll, _ := gtk.MenuItemNewWithLabel(i18n.T("Закрыть все терминалы", "Close all terminals"))
 	mCloseAll.Connect("activate", func() {
 		tv.CloseAllTabs()
 	})
@@ -802,13 +803,13 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
-	mCopy, _ := gtk.MenuItemNewWithLabel("Копировать")
+	mCopy, _ := gtk.MenuItemNewWithLabel(i18n.T("Копировать", "Copy"))
 	mCopy.Connect("activate", func() {
 		pane.Terminal.CopyClipboard()
 	})
 	menu.Append(mCopy)
 
-	mPaste, _ := gtk.MenuItemNewWithLabel("Вставить")
+	mPaste, _ := gtk.MenuItemNewWithLabel(i18n.T("Вставить", "Paste"))
 	mPaste.Connect("activate", func() {
 		pane.Terminal.PasteClipboard()
 	})
@@ -817,7 +818,7 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	sep1, _ := gtk.SeparatorMenuItemNew()
 	menu.Append(sep1)
 
-	mSplitH, _ := gtk.MenuItemNewWithLabel("Разделить по горизонтали (сверху / снизу)")
+	mSplitH, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить по горизонтали (сверху / снизу)", "Split horizontally (top / bottom)"))
 	mSplitH.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
 			tv.OnSplitRequested(pane.Session, false)
@@ -825,7 +826,7 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	})
 	menu.Append(mSplitH)
 
-	mSplitV, _ := gtk.MenuItemNewWithLabel("Разделить по вертикали (слева / справа)")
+	mSplitV, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить по вертикали (слева / справа)", "Split vertically (left / right)"))
 	mSplitV.Connect("activate", func() {
 		if tv.OnSplitRequested != nil {
 			tv.OnSplitRequested(pane.Session, true)
@@ -834,7 +835,7 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	menu.Append(mSplitV)
 
 	if len(pane.TabItem.Panes) > 1 {
-		mClosePane, _ := gtk.MenuItemNewWithLabel("Закрыть этот терминал")
+		mClosePane, _ := gtk.MenuItemNewWithLabel(i18n.T("Закрыть этот терминал", "Close this terminal"))
 		mClosePane.Connect("activate", func() {
 			tv.ClosePane(pane)
 		})
@@ -844,13 +845,13 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	sep2, _ := gtk.SeparatorMenuItemNew()
 	menu.Append(sep2)
 
-	mFind, _ := gtk.MenuItemNewWithLabel("Поиск в терминале...")
+	mFind, _ := gtk.MenuItemNewWithLabel(i18n.T("Поиск в терминале...", "Find in terminal..."))
 	mFind.Connect("activate", func() {
 		pane.Search.Show()
 	})
 	menu.Append(mFind)
 
-	mClear, _ := gtk.MenuItemNewWithLabel("Очистить терминал")
+	mClear, _ := gtk.MenuItemNewWithLabel(i18n.T("Очистить терминал", "Clear terminal"))
 	mClear.Connect("activate", func() {
 		pane.Terminal.Reset(true)
 	})

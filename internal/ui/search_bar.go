@@ -2,8 +2,8 @@ package ui
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/session"
 	"github.com/darakcheeff/pac/internal/ui/vte"
 	"github.com/gotk3/gotk3/gdk"
@@ -34,23 +34,23 @@ func NewSearchBar() (*SearchBar, error) {
 	box.SetMarginBottom(2)
 
 	entry, _ := gtk.SearchEntryNew()
-	entry.SetPlaceholderText("Поиск в терминале...")
+	entry.SetPlaceholderText(i18n.T("Поиск в терминале...", "Search terminal..."))
 	entry.SetSizeRequest(220, -1)
 	box.PackStart(entry, false, false, 0)
 
 	prevBtn, _ := gtk.ButtonNewFromIconName("go-up-symbolic", gtk.ICON_SIZE_BUTTON)
-	prevBtn.SetTooltipText("Предыдущее совпадение (Shift+Enter)")
+	prevBtn.SetTooltipText(i18n.T("Предыдущее совпадение (Shift+Enter)", "Previous match (Shift+Enter)"))
 	box.PackStart(prevBtn, false, false, 0)
 
 	nextBtn, _ := gtk.ButtonNewFromIconName("go-down-symbolic", gtk.ICON_SIZE_BUTTON)
-	nextBtn.SetTooltipText("Следующее совпадение (Enter)")
+	nextBtn.SetTooltipText(i18n.T("Следующее совпадение (Enter)", "Next match (Enter)"))
 	box.PackStart(nextBtn, false, false, 0)
 
-	caseCheck, _ := gtk.CheckButtonNewWithLabel("С учетом регистра")
+	caseCheck, _ := gtk.CheckButtonNewWithLabel(i18n.T("С учетом регистра", "Match case"))
 	box.PackStart(caseCheck, false, false, 0)
 
 	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_BUTTON)
-	closeBtn.SetTooltipText("Закрыть поиск (Escape)")
+	closeBtn.SetTooltipText(i18n.T("Закрыть поиск (Escape)", "Close search (Escape)"))
 	box.PackEnd(closeBtn, false, false, 0)
 
 	sb := &SearchBar{
@@ -133,7 +133,7 @@ func (sb *SearchBar) Hide() {
 // ShowGlobalSearchDialog shows multi-session search window
 func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSelectSession func(sessionID string)) {
 	dlg, _ := gtk.DialogNew()
-	dlg.SetTitle("Глобальный поиск по всем активным сессиям")
+	dlg.SetTitle(i18n.T("Глобальный поиск по всем активным сессиям", "Global Search across active sessions"))
 	dlg.SetTransientFor(parent)
 	dlg.SetModal(true)
 	dlg.SetDefaultSize(650, 420)
@@ -148,11 +148,11 @@ func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSele
 	// Top search box
 	topBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 6)
 	entry, _ := gtk.SearchEntryNew()
-	entry.SetPlaceholderText("Поиск строки во всех сессиях...")
+	entry.SetPlaceholderText(i18n.T("Поиск строки во всех сессиях...", "Search string in all sessions..."))
 	entry.SetHExpand(true)
 	topBox.PackStart(entry, true, true, 0)
 
-	caseCheck, _ := gtk.CheckButtonNewWithLabel("С учетом регистра")
+	caseCheck, _ := gtk.CheckButtonNewWithLabel(i18n.T("С учетом регистра", "Match case"))
 	topBox.PackStart(caseCheck, false, false, 0)
 	box.PackStart(topBox, false, false, 0)
 
@@ -163,20 +163,20 @@ func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSele
 
 	// Column 1: Host / Session
 	rHost, _ := gtk.CellRendererTextNew()
-	cHost, _ := gtk.TreeViewColumnNewWithAttribute("Сессия / Хост", rHost, "text", 1)
+	cHost, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Сессия / Хост", "Session / Host"), rHost, "text", 1)
 	cHost.SetResizable(true)
 	cHost.SetMinWidth(150)
 	treeView.AppendColumn(cHost)
 
 	// Column 2: Line Number
 	rLine, _ := gtk.CellRendererTextNew()
-	cLine, _ := gtk.TreeViewColumnNewWithAttribute("Строка", rLine, "text", 2)
+	cLine, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Строка", "Line"), rLine, "text", 2)
 	cLine.SetMinWidth(60)
 	treeView.AppendColumn(cLine)
 
 	// Column 3: Matching Text
 	rText, _ := gtk.CellRendererTextNew()
-	cText, _ := gtk.TreeViewColumnNewWithAttribute("Найденный текст", rText, "text", 3)
+	cText, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Найденный текст", "Matching text"), rText, "text", 3)
 	cText.SetResizable(true)
 	cText.SetExpand(true)
 	treeView.AppendColumn(cText)
@@ -188,7 +188,7 @@ func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSele
 	scrolled.Add(treeView)
 	box.PackStart(scrolled, true, true, 0)
 
-	statusLabel, _ := gtk.LabelNew("Введите текст для поиска")
+	statusLabel, _ := gtk.LabelNew(i18n.T("Введите текст для поиска", "Enter text to search"))
 	statusLabel.SetHAlign(gtk.ALIGN_START)
 	box.PackStart(statusLabel, false, false, 0)
 
@@ -198,7 +198,7 @@ func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSele
 		query, _ := entry.GetText()
 		listStore.Clear()
 		if query == "" {
-			statusLabel.SetText("Введите текст для поиска")
+			statusLabel.SetText(i18n.T("Введите текст для поиска", "Enter text to search"))
 			return
 		}
 
@@ -210,7 +210,7 @@ func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSele
 			_ = listStore.SetValue(iter, 2, m.LineNumber)
 			_ = listStore.SetValue(iter, 3, m.LineText)
 		}
-		statusLabel.SetText(fmt.Sprintf("Найдено совпадений: %d", len(matches)))
+		statusLabel.SetText(i18n.Tf("Найдено совпадений: %d", "Matches found: %d", len(matches)))
 	}
 
 	entry.Connect("search-changed", func() {
@@ -233,7 +233,7 @@ func ShowGlobalSearchDialog(parent *gtk.Window, manager *session.Manager, onSele
 		}
 	})
 
-	_, _ = dlg.AddButton("Закрыть", gtk.RESPONSE_CLOSE)
+	_, _ = dlg.AddButton(i18n.T("Закрыть", "Close"), gtk.RESPONSE_CLOSE)
 	dlg.Connect("response", func(_ *gtk.Dialog, responseId gtk.ResponseType) {
 		dlg.Destroy()
 	})
