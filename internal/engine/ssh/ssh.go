@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -38,12 +39,12 @@ func ConnectSSH(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, 
 // ConnectSSHWithOutput establishes SSH connection and routes stdout/stderr to outputWriter
 func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, outputWriter io.Writer, jumpClient *ssh.Client) (*SSHSession, error) {
 	authMethods := []ssh.AuthMethod{}
-
-	// 1. SSH Agent
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+	var agentClient agent.ExtendedAgent
+	// 1. SSH Agent (with KeePassXC / OpenSSH agent socket autodetection)
+	if sock := getSSHAgentSocket(); sock != "" {
 		if conn, err := net.Dial("unix", sock); err == nil {
-			ag := agent.NewClient(conn)
-			authMethods = append(authMethods, ssh.PublicKeysCallback(ag.Signers))
+			agentClient = agent.NewClient(conn)
+			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
 		}
 	}
 
@@ -162,6 +163,12 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 	// X11 Forwarding if enabled
 	if host.X11Forwarding {
 		_ = SetupX11Forwarding(client, session)
+	}
+
+	// SSH Agent Forwarding (KeePassXC / ssh-agent forwarding)
+	if agentClient != nil {
+		_ = agent.ForwardToAgent(client, agentClient)
+		_ = agent.RequestAgentForwarding(session)
 	}
 
 	// Connect pipes: user typing from bridge.Slave -> SSH stdin
@@ -288,4 +295,35 @@ func (s *SSHSession) keepAliveLoop() {
 			}
 		}
 	}
+}
+
+// getSSHAgentSocket returns the active SSH agent socket path, looking up env and common fallback paths
+func getSSHAgentSocket() string {
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		if fi, err := os.Stat(sock); err == nil && (fi.Mode()&os.ModeSocket != 0) {
+			return sock
+		}
+	}
+
+	uid := os.Getuid()
+	candidates := []string{
+		fmt.Sprintf("/run/user/%d/openssh_agent", uid),
+		fmt.Sprintf("/run/user/%d/ssh-agent.socket", uid),
+		fmt.Sprintf("/run/user/%d/keyring/ssh", uid),
+		fmt.Sprintf("/run/user/%d/gnupg/S.gpg-agent.ssh", uid),
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, ".cache", "keepassxc", "ssh-agent.socket"),
+			filepath.Join(home, ".1password", "agent.sock"),
+		)
+	}
+
+	for _, path := range candidates {
+		if fi, err := os.Stat(path); err == nil && (fi.Mode()&os.ModeSocket != 0) {
+			return path
+		}
+	}
+	return ""
 }
