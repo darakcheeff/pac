@@ -9,6 +9,7 @@ import (
 
 	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/storage"
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -297,26 +298,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(entryWorkDir, 1, 8, 1, 1)
 	gridNet.Attach(btnBrowseWorkDir, 2, 8, 1, 1)
 
-	tabNetLabel := createTabLabel(i18n.T("Параметры соединения", "Connection Parameters"))
-	notebook.AppendPage(gridNet, tabNetLabel)
-
-	// --- Tab 2: Authentication (SSH & Telnet) ---
-	gridAuth, _ := gtk.GridNew()
-	gridAuth.SetRowSpacing(8)
-	gridAuth.SetColumnSpacing(8)
-	gridAuth.SetMarginStart(12)
-	gridAuth.SetMarginEnd(12)
-	gridAuth.SetMarginTop(12)
-	gridAuth.SetMarginBottom(12)
-
+	// Authentication fields on "Основное" tab
 	// Username
 	lblUser, _ := gtk.LabelNew(i18n.T("Имя пользователя:", "Username:"))
 	lblUser.SetHAlign(gtk.ALIGN_END)
 	entryUser, _ := gtk.EntryNew()
 	entryUser.SetText(host.Username)
 	entryUser.SetHExpand(true)
-	gridAuth.Attach(lblUser, 0, 0, 1, 1)
-	gridAuth.Attach(entryUser, 1, 0, 2, 1)
+	gridNet.Attach(lblUser, 0, 9, 1, 1)
+	gridNet.Attach(entryUser, 1, 9, 2, 1)
 
 	// Auth Method
 	lblAuthM, _ := gtk.LabelNew(i18n.T("Метод авторизации:", "Auth Method:"))
@@ -331,8 +321,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		curAuth = "password"
 	}
 	comboAuthM.SetActiveID(curAuth)
-	gridAuth.Attach(lblAuthM, 0, 1, 1, 1)
-	gridAuth.Attach(comboAuthM, 1, 1, 2, 1)
+	gridNet.Attach(lblAuthM, 0, 10, 1, 1)
+	gridNet.Attach(comboAuthM, 1, 10, 2, 1)
 
 	// Password
 	lblPass, _ := gtk.LabelNew(i18n.T("Пароль:", "Password:"))
@@ -345,9 +335,9 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	btnTogglePass.Connect("clicked", func() {
 		entryPass.SetVisibility(!entryPass.GetVisibility())
 	})
-	gridAuth.Attach(lblPass, 0, 2, 1, 1)
-	gridAuth.Attach(entryPass, 1, 2, 1, 1)
-	gridAuth.Attach(btnTogglePass, 2, 2, 1, 1)
+	gridNet.Attach(lblPass, 0, 11, 1, 1)
+	gridNet.Attach(entryPass, 1, 11, 1, 1)
+	gridNet.Attach(btnTogglePass, 2, 11, 1, 1)
 
 	// Key Path
 	lblKey, _ := gtk.LabelNew(i18n.T("Файл SSH-ключа:", "SSH Key File:"))
@@ -369,9 +359,9 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		}
 		fc.Destroy()
 	})
-	gridAuth.Attach(lblKey, 0, 3, 1, 1)
-	gridAuth.Attach(entryKey, 1, 3, 1, 1)
-	gridAuth.Attach(btnBrowseKey, 2, 3, 1, 1)
+	gridNet.Attach(lblKey, 0, 12, 1, 1)
+	gridNet.Attach(entryKey, 1, 12, 1, 1)
+	gridNet.Attach(btnBrowseKey, 2, 12, 1, 1)
 
 	// Key Passphrase
 	lblKeyPass, _ := gtk.LabelNew(i18n.T("Пароль к ключу:", "Key Passphrase:"))
@@ -379,11 +369,11 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	entryKeyPass, _ := gtk.EntryNew()
 	entryKeyPass.SetVisibility(false)
 	entryKeyPass.SetText(host.KeyPass)
-	gridAuth.Attach(lblKeyPass, 0, 4, 1, 1)
-	gridAuth.Attach(entryKeyPass, 1, 4, 2, 1)
+	gridNet.Attach(lblKeyPass, 0, 13, 1, 1)
+	gridNet.Attach(entryKeyPass, 1, 13, 2, 1)
 
-	tabAuthLabel := createTabLabel(i18n.T("Авторизация", "Authentication"))
-	notebook.AppendPage(gridAuth, tabAuthLabel)
+	tabNetLabel := createTabLabel(i18n.T("Основное", "General"))
+	notebook.AppendPage(gridNet, tabNetLabel)
 
 	// --- Tab 3: ProxyJump & Network Advanced (SSH) ---
 	gridJump, _ := gtk.GridNew()
@@ -430,6 +420,122 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	spinKeepAlive.SetTooltipText(i18n.T("Интервал отправки SSH/TCP keepalive пакетов (в секундах, 0 - выключено, по умолчанию 15)", "SSH/TCP keepalive packet interval in seconds (0 = disabled, default = 15)"))
 	gridJump.Attach(lblKeepAlive, 0, 3, 1, 1)
 	gridJump.Attach(spinKeepAlive, 1, 3, 1, 1)
+
+	// Separator before Port Forwarding
+	sepFwd, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	gridJump.Attach(sepFwd, 0, 4, 3, 1)
+
+	// Port Forwarding Header
+	lblFwdHeader, _ := gtk.LabelNew(i18n.T("Проброс портов (SSH Tunnels):", "Port Forwarding (SSH Tunnels):"))
+	lblFwdHeader.SetHAlign(gtk.ALIGN_START)
+	gridJump.Attach(lblFwdHeader, 0, 5, 3, 1)
+
+	// Port Forwarding List & Buttons
+	fwdStore, _ := gtk.ListStoreNew(glib.TYPE_STRING, glib.TYPE_INT, glib.TYPE_STRING)
+	fwdView, _ := gtk.TreeViewNewWithModel(fwdStore)
+	fwdView.SetHeadersVisible(true)
+
+	rFwdType, _ := gtk.CellRendererTextNew()
+	colFwdType, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Тип", "Type"), rFwdType, "text", 0)
+	colFwdType.SetMinWidth(130)
+	fwdView.AppendColumn(colFwdType)
+
+	rFwdPort, _ := gtk.CellRendererTextNew()
+	colFwdPort, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Локальный порт", "Local Port"), rFwdPort, "text", 1)
+	colFwdPort.SetMinWidth(90)
+	fwdView.AppendColumn(colFwdPort)
+
+	rFwdTarget, _ := gtk.CellRendererTextNew()
+	colFwdTarget, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Удаленный адрес", "Remote Target"), rFwdTarget, "text", 2)
+	colFwdTarget.SetMinWidth(140)
+	fwdView.AppendColumn(colFwdTarget)
+
+	currentForwards := make([]storage.PortForward, len(host.PortForwards))
+	copy(currentForwards, host.PortForwards)
+
+	refreshFwdStore := func() {
+		fwdStore.Clear()
+		for _, f := range currentForwards {
+			iter := fwdStore.Append()
+			typeStr := "Local (-L)"
+			targetStr := fmt.Sprintf("%s:%d", f.RemoteHost, f.RemotePort)
+			if f.Type == "remote" {
+				typeStr = "Remote (-R)"
+			} else if f.Type == "dynamic" {
+				typeStr = "Dynamic SOCKS5 (-D)"
+				targetStr = "-"
+			}
+			_ = fwdStore.SetValue(iter, 0, typeStr)
+			_ = fwdStore.SetValue(iter, 1, f.LocalPort)
+			_ = fwdStore.SetValue(iter, 2, targetStr)
+		}
+	}
+	refreshFwdStore()
+
+	fwdScroll, _ := gtk.ScrolledWindowNew(nil, nil)
+	fwdScroll.SetPolicy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+	fwdScroll.SetShadowType(gtk.SHADOW_IN)
+	fwdScroll.SetSizeRequest(360, 110)
+	fwdScroll.SetHExpand(true)
+	fwdScroll.SetVExpand(true)
+	fwdScroll.Add(fwdView)
+
+	fwdBtnBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 4)
+	btnAddFwd, _ := gtk.ButtonNewWithLabel(i18n.T("➕ Добавить...", "➕ Add..."))
+	btnEditFwd, _ := gtk.ButtonNewWithLabel(i18n.T("✏ Изменить...", "✏ Edit..."))
+	btnDelFwd, _ := gtk.ButtonNewWithLabel(i18n.T("🗑 Удалить", "🗑 Delete"))
+
+	fwdBtnBox.PackStart(btnAddFwd, false, false, 0)
+	fwdBtnBox.PackStart(btnEditFwd, false, false, 0)
+	fwdBtnBox.PackStart(btnDelFwd, false, false, 0)
+
+	btnAddFwd.Connect("clicked", func() {
+		showPortForwardWizardDialog(parent, nil, func(f storage.PortForward) {
+			currentForwards = append(currentForwards, f)
+			refreshFwdStore()
+		})
+	})
+
+	editSelectedFwd := func() {
+		sel, _ := fwdView.GetSelection()
+		_, iter, ok := sel.GetSelected()
+		if ok && iter != nil {
+			path, _ := fwdStore.GetPath(iter)
+			idx := path.GetIndices()[0]
+			if idx >= 0 && idx < len(currentForwards) {
+				showPortForwardWizardDialog(parent, &currentForwards[idx], func(f storage.PortForward) {
+					currentForwards[idx] = f
+					refreshFwdStore()
+				})
+			}
+		}
+	}
+
+	btnEditFwd.Connect("clicked", func() {
+		editSelectedFwd()
+	})
+
+	fwdView.Connect("row-activated", func() {
+		editSelectedFwd()
+	})
+
+	btnDelFwd.Connect("clicked", func() {
+		sel, _ := fwdView.GetSelection()
+		_, iter, ok := sel.GetSelected()
+		if ok && iter != nil {
+			path, _ := fwdStore.GetPath(iter)
+			idx := path.GetIndices()[0]
+			if idx >= 0 && idx < len(currentForwards) {
+				currentForwards = append(currentForwards[:idx], currentForwards[idx+1:]...)
+				refreshFwdStore()
+			}
+		}
+	})
+
+	fwdContainer, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 6)
+	fwdContainer.PackStart(fwdScroll, true, true, 0)
+	fwdContainer.PackStart(fwdBtnBox, false, false, 0)
+	gridJump.Attach(fwdContainer, 0, 6, 3, 1)
 
 	tabJumpLabel := createTabLabel(i18n.T("Туннелирование и сеть", "Tunnels & Network"))
 	notebook.AppendPage(gridJump, tabJumpLabel)
@@ -594,31 +700,62 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		entryWorkDir.SetVisible(isLocal)
 		btnBrowseWorkDir.SetVisible(isLocal)
 
-		// Tabs visibility
-		gridAuth.SetVisible(proto == "ssh" || proto == "telnet")
+		// Tunnels tab visibility (SSH only)
 		gridJump.SetVisible(proto == "ssh")
 
-		// Auth fields for Telnet vs SSH
-		if proto == "telnet" {
+		// Dynamic authentication fields on "Основное"
+		if proto != "ssh" && proto != "telnet" {
+			lblUser.SetVisible(false)
+			entryUser.SetVisible(false)
 			lblAuthM.SetVisible(false)
 			comboAuthM.SetVisible(false)
+			lblPass.SetVisible(false)
+			entryPass.SetVisible(false)
+			btnTogglePass.SetVisible(false)
 			lblKey.SetVisible(false)
 			entryKey.SetVisible(false)
 			btnBrowseKey.SetVisible(false)
 			lblKeyPass.SetVisible(false)
 			entryKeyPass.SetVisible(false)
-		} else if proto == "ssh" {
+		} else if proto == "telnet" {
+			lblUser.SetVisible(true)
+			entryUser.SetVisible(true)
+			lblAuthM.SetVisible(false)
+			comboAuthM.SetVisible(false)
+			lblPass.SetVisible(true)
+			entryPass.SetVisible(true)
+			btnTogglePass.SetVisible(true)
+			lblKey.SetVisible(false)
+			entryKey.SetVisible(false)
+			btnBrowseKey.SetVisible(false)
+			lblKeyPass.SetVisible(false)
+			entryKeyPass.SetVisible(false)
+		} else { // ssh
+			lblUser.SetVisible(true)
+			entryUser.SetVisible(true)
 			lblAuthM.SetVisible(true)
 			comboAuthM.SetVisible(true)
-			lblKey.SetVisible(true)
-			entryKey.SetVisible(true)
-			btnBrowseKey.SetVisible(true)
-			lblKeyPass.SetVisible(true)
-			entryKeyPass.SetVisible(true)
+			authMethod := comboAuthM.GetActiveID()
+			showPass := authMethod == "password"
+			showKey := authMethod == "key"
+
+			lblPass.SetVisible(showPass)
+			entryPass.SetVisible(showPass)
+			btnTogglePass.SetVisible(showPass)
+
+			lblKey.SetVisible(showKey)
+			entryKey.SetVisible(showKey)
+			btnBrowseKey.SetVisible(showKey)
+			lblKeyPass.SetVisible(showKey)
+			entryKeyPass.SetVisible(showKey)
 		}
 	}
 
 	comboProto.Connect("changed", func() {
+		updateProtocolVisibility()
+	})
+
+	comboAuthM.Connect("changed", func() {
 		updateProtocolVisibility()
 	})
 
@@ -694,6 +831,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		notesText, _ := bufNotes.GetText(startIter, endIter, false)
 		host.Notes = notesText
 
+		host.PortForwards = currentForwards
+
 		_ = store.SaveHost(host)
 		if onSaved != nil {
 			onSaved(host)
@@ -705,4 +844,113 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 func createTabLabel(text string) *gtk.Label {
 	lbl, _ := gtk.LabelNew(text)
 	return lbl
+}
+
+func showPortForwardWizardDialog(parent *gtk.Window, initial *storage.PortForward, onSave func(f storage.PortForward)) {
+	dlg, _ := gtk.DialogNew()
+	dlg.SetTitle(i18n.T("Мастер проброса портов", "Port Forwarding Wizard"))
+	dlg.SetTransientFor(parent)
+	dlg.SetModal(true)
+	dlg.SetDefaultSize(400, 220)
+
+	contentArea, _ := dlg.GetContentArea()
+	grid, _ := gtk.GridNew()
+	grid.SetRowSpacing(8)
+	grid.SetColumnSpacing(8)
+	grid.SetMarginStart(14)
+	grid.SetMarginEnd(14)
+	grid.SetMarginTop(14)
+	grid.SetMarginBottom(14)
+
+	lblType, _ := gtk.LabelNew(i18n.T("Тип туннеля:", "Tunnel Type:"))
+	lblType.SetHAlign(gtk.ALIGN_END)
+	comboType, _ := gtk.ComboBoxTextNew()
+	comboType.Append("local", i18n.T("Локальный (-L: локальный порт -> сервер)", "Local (-L: local port -> remote)"))
+	comboType.Append("remote", i18n.T("Удаленный (-R: порт сервера -> локальный)", "Remote (-R: remote port -> local)"))
+	comboType.Append("dynamic", i18n.T("Динамический (-D: SOCKS5 прокси)", "Dynamic (-D: SOCKS5 proxy)"))
+	comboType.SetActiveID("local")
+	if initial != nil && initial.Type != "" {
+		comboType.SetActiveID(initial.Type)
+	}
+	grid.Attach(lblType, 0, 0, 1, 1)
+	grid.Attach(comboType, 1, 0, 1, 1)
+
+	lblLocal, _ := gtk.LabelNew(i18n.T("Локальный порт:", "Local Port:"))
+	lblLocal.SetHAlign(gtk.ALIGN_END)
+	spinLocal, _ := gtk.SpinButtonNewWithRange(1, 65535, 1)
+	locPort := 8080
+	if initial != nil && initial.LocalPort > 0 {
+		locPort = initial.LocalPort
+	}
+	spinLocal.SetValue(float64(locPort))
+	grid.Attach(lblLocal, 0, 1, 1, 1)
+	grid.Attach(spinLocal, 1, 1, 1, 1)
+
+	lblRemoteHost, _ := gtk.LabelNew(i18n.T("Удаленный хост:", "Remote Host:"))
+	lblRemoteHost.SetHAlign(gtk.ALIGN_END)
+	entryRemoteHost, _ := gtk.EntryNew()
+	remHost := "localhost"
+	if initial != nil && initial.RemoteHost != "" {
+		remHost = initial.RemoteHost
+	}
+	entryRemoteHost.SetText(remHost)
+	grid.Attach(lblRemoteHost, 0, 2, 1, 1)
+	grid.Attach(entryRemoteHost, 1, 2, 1, 1)
+
+	lblRemotePort, _ := gtk.LabelNew(i18n.T("Удаленный порт:", "Remote Port:"))
+	lblRemotePort.SetHAlign(gtk.ALIGN_END)
+	spinRemotePort, _ := gtk.SpinButtonNewWithRange(1, 65535, 1)
+	remPort := 80
+	if initial != nil && initial.RemotePort > 0 {
+		remPort = initial.RemotePort
+	}
+	spinRemotePort.SetValue(float64(remPort))
+	grid.Attach(lblRemotePort, 0, 3, 1, 1)
+	grid.Attach(spinRemotePort, 1, 3, 1, 1)
+
+	updateWizardFields := func() {
+		t := comboType.GetActiveID()
+		isDyn := t == "dynamic"
+		lblRemoteHost.SetVisible(!isDyn)
+		entryRemoteHost.SetVisible(!isDyn)
+		lblRemotePort.SetVisible(!isDyn)
+		spinRemotePort.SetVisible(!isDyn)
+		if isDyn {
+			lblLocal.SetText(i18n.T("Порт SOCKS5:", "SOCKS5 Port:"))
+		} else {
+			lblLocal.SetText(i18n.T("Локальный порт:", "Local Port:"))
+		}
+	}
+	comboType.Connect("changed", func() {
+		updateWizardFields()
+	})
+
+	contentArea.Add(grid)
+	_, _ = dlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	btnOk, _ := dlg.AddButton(i18n.T("Сохранить", "Save"), gtk.RESPONSE_OK)
+	btnOk.SetCanDefault(true)
+	dlg.SetDefault(btnOk)
+
+	dlg.ShowAll()
+	updateWizardFields()
+
+	if dlg.Run() == gtk.RESPONSE_OK {
+		fType := comboType.GetActiveID()
+		rH, _ := entryRemoteHost.GetText()
+		rP := int(spinRemotePort.GetValue())
+		if fType == "dynamic" {
+			rH = ""
+			rP = 0
+		}
+		res := storage.PortForward{
+			Type:       fType,
+			LocalPort:  int(spinLocal.GetValue()),
+			RemoteHost: rH,
+			RemotePort: rP,
+		}
+		if onSave != nil {
+			onSave(res)
+		}
+	}
+	dlg.Destroy()
 }
