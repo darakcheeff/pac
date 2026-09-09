@@ -30,6 +30,32 @@ func toPaned(iw gtk.IWidget) *gtk.Paned {
 	}
 }
 
+// toContainer safely casts an IWidget to *gtk.Container
+func toContainer(iw gtk.IWidget) *gtk.Container {
+	if iw == nil {
+		return nil
+	}
+	if c, ok := iw.(*gtk.Container); ok {
+		return c
+	}
+	return &gtk.Container{
+		Widget: *iw.ToWidget(),
+	}
+}
+
+// removeWidgetFromParent detaches a widget from its parent container, if any
+func removeWidgetFromParent(iw gtk.IWidget) {
+	if iw == nil {
+		return
+	}
+	w := iw.ToWidget()
+	parent, err := w.GetParent()
+	if err == nil && parent != nil {
+		c := toContainer(parent)
+		c.Remove(w)
+	}
+}
+
 // areWidgetsEqual compares two IWidgets by underlying GObject pointer
 func areWidgetsEqual(w1, w2 gtk.IWidget) bool {
 	if w1 == nil || w2 == nil {
@@ -141,7 +167,9 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	// Focus and click handling
 	term.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
-		item.FocusedPane = pane
+		if pane.TabItem != nil {
+			pane.TabItem.FocusedPane = pane
+		}
 		if tv.OnTabChanged != nil {
 			tv.OnTabChanged(sess)
 		}
@@ -153,7 +181,9 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	})
 
 	term.Widget.Connect("focus-in-event", func() {
-		item.FocusedPane = pane
+		if pane.TabItem != nil {
+			pane.TabItem.FocusedPane = pane
+		}
 		if tv.OnTabChanged != nil {
 			tv.OnTabChanged(sess)
 		}
@@ -460,16 +490,107 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 	item.ContentBox.ShowAll()
 }
 
+// AddTabWithPane creates a new TabItem using an existing TerminalPane (used for unsplitting / detaching)
+func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
+	if pane == nil || pane.Session == nil {
+		return nil, fmt.Errorf("invalid pane")
+	}
+
+	contentBox, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	contentBox.SetHExpand(true)
+	contentBox.SetVExpand(true)
+
+	eventBox, _ := gtk.EventBoxNew()
+	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK | gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
+
+	tabBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
+	tabBox.SetMarginStart(2)
+	tabBox.SetMarginEnd(2)
+
+	icon, _ := gtk.ImageNewFromIconName("utilities-terminal-symbolic", gtk.ICON_SIZE_MENU)
+	tabBox.PackStart(icon, false, false, 0)
+
+	titleLabel, _ := gtk.LabelNew(pane.Session.Title)
+	tabBox.PackStart(titleLabel, true, true, 0)
+
+	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_MENU)
+	closeBtn.SetRelief(gtk.RELIEF_NONE)
+	closeBtn.SetTooltipText(i18n.T("Закрыть вкладку", "Close tab"))
+	tabBox.PackEnd(closeBtn, false, false, 0)
+
+	eventBox.Add(tabBox)
+	eventBox.ShowAll()
+
+	item := &TabItem{
+		ID:          pane.Session.ID,
+		Session:     pane.Session,
+		Label:       titleLabel,
+		TabBox:      tabBox,
+		EventBox:    eventBox,
+		ContentBox:  contentBox,
+		Panes:       []*TerminalPane{pane},
+		FocusedPane: pane,
+	}
+
+	pane.TabItem = item
+	pane.SplitDirection = ""
+	pane.ParentSessionID = ""
+
+	// Ensure pane.Box has no lingering parent before packing
+	removeWidgetFromParent(pane.Box)
+
+	contentBox.PackStart(pane.Box, true, true, 0)
+	contentBox.ShowAll()
+
+	_ = tv.Notebook.AppendPage(contentBox, eventBox)
+	tv.Notebook.SetTabReorderable(contentBox, true)
+	tv.items = append(tv.items, item)
+
+	closeBtn.Connect("clicked", func() {
+		tv.CloseTab(item)
+	})
+
+	eventBox.Connect("scroll-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		return tv.handleTabScroll(event, false)
+	})
+
+	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		btnEvent := gdk.EventButtonNewFromEvent(event)
+		if btnEvent.Type() == gdk.EVENT_2BUTTON_PRESS && btnEvent.Button() == gdk.BUTTON_PRIMARY {
+			tv.showRenameDialog(item)
+			return true
+		} else if btnEvent.Button() == gdk.BUTTON_SECONDARY {
+			tv.showTabContextMenu(item, btnEvent.Time())
+			return true
+		}
+		return false
+	})
+
+	return item, nil
+}
+
 // UnsplitTab moves all split panes except the first one into their own individual tabs
 func (tv *TabView) UnsplitTab(item *TabItem) {
 	if item == nil || len(item.Panes) <= 1 {
+		log.Printf("[TAB] UnsplitTab: item is nil or has <= 1 panes")
 		return
 	}
 
+	log.Printf("[TAB] Unsplitting tab %q (current panes=%d)", item.Session.Title, len(item.Panes))
+
 	primaryPane := item.Panes[0]
 	extraPanes := item.Panes[1:]
+	focusedPane := item.FocusedPane
 
-	// Clear contentBox and restore primary pane alone
+	// 1. Detach ALL panes from their current parent containers (Paned widgets)
+	for _, p := range item.Panes {
+		removeWidgetFromParent(p.Box)
+	}
+
+	// 2. Clear contentBox of any remaining containers (the old Paned tree)
 	children := item.ContentBox.GetChildren()
 	if children != nil {
 		for l := children; l != nil; l = l.Next() {
@@ -480,15 +601,46 @@ func (tv *TabView) UnsplitTab(item *TabItem) {
 		}
 	}
 
+	// 3. Restore primary pane in original tab
 	item.Panes = []*TerminalPane{primaryPane}
 	item.FocusedPane = primaryPane
+	primaryPane.TabItem = item
+	primaryPane.SplitDirection = ""
+	primaryPane.ParentSessionID = ""
 	item.ContentBox.PackStart(primaryPane.Box, true, true, 0)
 	item.ContentBox.ShowAll()
 
-	// Open extra panes as standalone tabs
+	// 4. Open each extra pane as its own standalone tab
+	var targetTabToFocus *TabItem
 	for _, extra := range extraPanes {
-		_, _ = tv.AddTab(extra.Session, extra.Terminal)
+		newTab, err := tv.AddTabWithPane(extra)
+		if err != nil {
+			log.Printf("[TAB] ERROR adding tab for detached pane %q: %v", extra.Session.Title, err)
+		} else if extra == focusedPane {
+			targetTabToFocus = newTab
+		}
 	}
+
+	// 5. Select active tab and focus terminal
+	if targetTabToFocus != nil {
+		pageNum := tv.Notebook.PageNum(targetTabToFocus.ContentBox)
+		if pageNum >= 0 {
+			tv.Notebook.SetCurrentPage(pageNum)
+		}
+		if focusedPane != nil && focusedPane.Terminal != nil {
+			focusedPane.Terminal.GrabFocus()
+		}
+	} else {
+		pageNum := tv.Notebook.PageNum(item.ContentBox)
+		if pageNum >= 0 {
+			tv.Notebook.SetCurrentPage(pageNum)
+		}
+		if primaryPane.Terminal != nil {
+			primaryPane.Terminal.GrabFocus()
+		}
+	}
+
+	log.Printf("[TAB] Unsplit complete for %q, total tabs now=%d", item.Session.Title, len(tv.items))
 }
 
 // CloseTab closes entire tab and all underlying split sessions
@@ -685,7 +837,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	splitSubmenu.Append(mSplitH)
 
 	if len(item.Panes) > 1 {
-		mUnsplit, _ := gtk.MenuItemNewWithLabel(i18n.T("Объединить панели", "Unsplit (Merge Panes)"))
+		mUnsplit, _ := gtk.MenuItemNewWithLabel(i18n.T("Разгруппировать (↔)", "Unsplit (↔)"))
 		mUnsplit.Connect("activate", func() {
 			tv.UnsplitTab(item)
 		})

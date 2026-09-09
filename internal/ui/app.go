@@ -334,9 +334,15 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	btnUnsplit.SetTooltipText(i18n.T("Разгруппировать сплит в отдельную вкладку", "Unsplit pane into separate tab"))
 	btnUnsplit.Connect("clicked", func() {
 		tab := app.TabView.GetCurrentTab()
-		if tab != nil {
-			app.TabView.UnsplitTab(tab)
+		if tab == nil {
+			return
 		}
+		if len(tab.Panes) <= 1 {
+			app.StatusLabel.SetText(i18n.T("Текущая вкладка не содержит разделенных панелей", "Current tab has no split panes"))
+			return
+		}
+		app.TabView.UnsplitTab(tab)
+		app.StatusLabel.SetText(i18n.T("Панели успешно разгруппированы в отдельные вкладки", "Panes successfully unsplit into separate tabs"))
 	})
 	app.ToolBar.Insert(btnUnsplit, -1)
 
