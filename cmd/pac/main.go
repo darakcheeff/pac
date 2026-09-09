@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/darakcheeff/pac/internal/storage"
@@ -20,6 +21,7 @@ func main() {
 	runtime.LockOSThread()
 
 	dbPath := flag.String("db", "", "Path to SQLite database file")
+	connectTarget := flag.String("connect", "", "Host name or ID to connect to on startup")
 	flag.Parse()
 
 	gtk.Init(nil)
@@ -45,6 +47,23 @@ func main() {
 	}()
 
 	app.Window.ShowAll()
+
+	if *connectTarget != "" {
+		targets := strings.Split(*connectTarget, ",")
+		hosts, _ := store.GetAllHosts()
+		for _, target := range targets {
+			t := strings.TrimSpace(target)
+			for _, h := range hosts {
+				if h.ID == t || h.Name == t {
+					hostCopy := h
+					glib.IdleAdd(func() {
+						app.ConnectToHost(&hostCopy)
+					})
+					break
+				}
+			}
+		}
+	}
 
 	fmt.Println("PAC Connection Manager NextGen started successfully.")
 	gtk.Main()

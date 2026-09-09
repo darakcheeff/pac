@@ -500,10 +500,10 @@ func (app *AppWindow) setupMenuAndToolbar() {
 
 // ToggleNotesPanel toggles visibility of the right-hand notes panel without losing state
 func (app *AppWindow) ToggleNotesPanel() {
-	if app.NotesPanel.Box.IsVisible() {
-		app.NotesPanel.Box.Hide()
+	if app.NotesPanel.Box.GetVisible() {
+		app.NotesPanel.Box.SetVisible(false)
 	} else {
-		app.NotesPanel.Box.ShowAll()
+		app.NotesPanel.Box.SetVisible(true)
 		w := app.MainPaned.GetAllocatedWidth()
 		if w > 400 {
 			app.MainPaned.SetPosition(w - 250)

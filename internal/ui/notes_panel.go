@@ -86,6 +86,7 @@ func NewNotesPanel(store *storage.Store) (*NotesPanel, error) {
 		np.TextBuffer.SetText("")
 	})
 
+	box.ShowAll()
 	return np, nil
 }
 
