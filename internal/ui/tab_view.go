@@ -589,6 +589,22 @@ func (tv *TabView) FindTabBySession(sess *session.Session) *TabItem {
 	return nil
 }
 
+// SelectSession switches notebook to the tab containing session with specified ID
+func (tv *TabView) SelectSession(sessID string) {
+	for idx, item := range tv.items {
+		if item.Session != nil && item.Session.ID == sessID {
+			tv.Notebook.SetCurrentPage(idx)
+			return
+		}
+		for _, p := range item.Panes {
+			if p.Session != nil && p.Session.ID == sessID {
+				tv.Notebook.SetCurrentPage(idx)
+				return
+			}
+		}
+	}
+}
+
 func (tv *TabView) showRenameDialog(item *TabItem) {
 	dlg, _ := gtk.DialogNew()
 	dlg.SetTitle(i18n.T("Переименовать вкладку", "Rename Tab"))

@@ -280,10 +280,10 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 func (app *AppWindow) setupMenuAndToolbar() {
 	// --- Menus ---
-	// File Menu
-	mFile, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Файл", "_File"))
-	fileMenu, _ := gtk.MenuNew()
-	mFile.SetSubmenu(fileMenu)
+	// 1. Connection Menu (formerly File)
+	mConn, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Подключение", "_Connection"))
+	connMenu, _ := gtk.MenuNew()
+	mConn.SetSubmenu(connMenu)
 
 	mNewHost, _ := gtk.MenuItemNewWithLabel(i18n.T("Новое подключение...", "New Connection..."))
 	mNewHost.Connect("activate", func() {
@@ -291,7 +291,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 			app.HostTree.Reload()
 		})
 	})
-	fileMenu.Append(mNewHost)
+	connMenu.Append(mNewHost)
 
 	mQuickConnect, _ := gtk.MenuItemNewWithLabel(i18n.T("Быстрое подключение...", "Quick Connect..."))
 	mQuickConnect.Connect("activate", func() {
@@ -299,7 +299,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 			app.ConnectToHost(h)
 		})
 	})
-	fileMenu.Append(mQuickConnect)
+	connMenu.Append(mQuickConnect)
 
 	mImportOld, _ := gtk.MenuItemNewWithLabel(i18n.T("Импорт из Ásbrú v6 (asbru.conf)...", "Import from Ásbrú v6 (asbru.conf)..."))
 	mImportOld.Connect("activate", func() {
@@ -309,38 +309,45 @@ func (app *AppWindow) setupMenuAndToolbar() {
 			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий", "Successfully imported %d sessions", n))
 		}
 	})
-	fileMenu.Append(mImportOld)
+	connMenu.Append(mImportOld)
 
 	sep1, _ := gtk.SeparatorMenuItemNew()
-	fileMenu.Append(sep1)
+	connMenu.Append(sep1)
 
 	mQuit, _ := gtk.MenuItemNewWithLabel(i18n.T("Выход", "Quit"))
 	mQuit.Connect("activate", func() {
 		app.Quit()
 	})
-	fileMenu.Append(mQuit)
-	app.MenuBar.Append(mFile)
+	connMenu.Append(mQuit)
+	app.MenuBar.Append(mConn)
 
-	// Edit Menu
-	mEdit, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Правка", "_Edit"))
-	editMenu, _ := gtk.MenuNew()
-	mEdit.SetSubmenu(editMenu)
+	// 2. Search Menu (standalone top-level menu)
+	mSearch, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Поиск", "_Search"))
+	searchMenu, _ := gtk.MenuNew()
+	mSearch.SetSubmenu(searchMenu)
 
-	mGlobalSearch, _ := gtk.MenuItemNewWithLabel(i18n.T("Глобальный поиск по всем сессиям", "Global Search across all sessions"))
+	mFindInTerm, _ := gtk.MenuItemNewWithLabel(i18n.T("Поиск в текущем терминале...", "Find in current terminal..."))
+	mFindInTerm.Connect("activate", func() {
+		tab := app.TabView.GetCurrentTab()
+		if tab != nil && tab.FocusedPane != nil && tab.FocusedPane.Search != nil {
+			tab.FocusedPane.Search.Show()
+		}
+	})
+	searchMenu.Append(mFindInTerm)
+
+	mGlobalSearch, _ := gtk.MenuItemNewWithLabel(i18n.T("Глобальный поиск по всем сессиям...", "Global Search across all sessions..."))
 	mGlobalSearch.Connect("activate", func() {
 		ShowGlobalSearchDialog(app.Window, app.manager, func(sessionID string) {
-			// Select tab
+			app.TabView.SelectSession(sessionID)
 		})
 	})
-	editMenu.Append(mGlobalSearch)
-	app.MenuBar.Append(mEdit)
+	searchMenu.Append(mGlobalSearch)
+	app.MenuBar.Append(mSearch)
 
-	// View Menu
+	// 3. View Menu
 	mView, _ := gtk.MenuItemNewWithMnemonic(i18n.T("_Вид", "_View"))
 	viewMenu, _ := gtk.MenuNew()
 	mView.SetSubmenu(viewMenu)
-
-
 
 	mToggleSFTP, _ := gtk.CheckMenuItemNewWithLabel(i18n.T("SFTP файловый менеджер", "SFTP File Manager"))
 	mToggleSFTP.SetActive(true)
@@ -363,12 +370,6 @@ func (app *AppWindow) setupMenuAndToolbar() {
 		}
 	})
 	viewMenu.Append(mToggleBroadcast)
-
-	mToggleNotes, _ := gtk.MenuItemNewWithLabel(i18n.T("Панель заметок", "Notes Panel"))
-	mToggleNotes.Connect("activate", func() {
-		app.ToggleNotesPanel()
-	})
-	viewMenu.Append(mToggleNotes)
 
 	app.MenuBar.Append(mView)
 
@@ -484,7 +485,9 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	btnSearch.SetIconName("edit-find-symbolic")
 	btnSearch.SetTooltipText(i18n.T("Глобальный поиск текста по всем открытым сессиям и вкладкам", "Global text search across all open sessions and tabs"))
 	btnSearch.Connect("clicked", func() {
-		ShowGlobalSearchDialog(app.Window, app.manager, nil)
+		ShowGlobalSearchDialog(app.Window, app.manager, func(sessionID string) {
+			app.TabView.SelectSession(sessionID)
+		})
 	})
 	app.ToolBar.Insert(btnSearch, -1)
 
