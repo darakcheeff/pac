@@ -18,14 +18,16 @@ import (
 
 // SSHSession encapsulates an active SSH connection, channels, and PTY
 type SSHSession struct {
-	client         *ssh.Client
-	session        *ssh.Session
-	ptyBridge      *pty.PTYBridge
-	forwardManager *ForwardManager
-	ctx            context.Context
-	cancel         context.CancelFunc
-	mu             sync.Mutex
-	closed         bool
+	client            *ssh.Client
+	session           *ssh.Session
+	ptyBridge         *pty.PTYBridge
+	forwardManager    *ForwardManager
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex
+	closed            bool
+	keepAliveInterval time.Duration
+	keepAliveCountMax int
 }
 
 // ConnectSSH establishes SSH connection based on host profile
@@ -90,26 +92,47 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 	var client *ssh.Client
 	targetAddr := fmt.Sprintf("%s:%d", host.Host, host.Port)
 
+	keepAliveSec := host.SSHKeepAliveInterval
+	if keepAliveSec == 0 {
+		keepAliveSec = 15
+	}
+	keepAliveMax := host.SSHKeepAliveCountMax
+	if keepAliveMax == 0 {
+		keepAliveMax = 3
+	}
+
+	keepAliveDur := time.Duration(keepAliveSec) * time.Second
+	if keepAliveSec < 0 {
+		keepAliveDur = 0 // disabled
+	}
+
+	var conn net.Conn
 	if jumpClient != nil {
 		// Tunnel via bastion / jump host
-		conn, err := jumpClient.Dial("tcp", targetAddr)
+		var err error
+		conn, err = jumpClient.Dial("tcp", targetAddr)
 		if err != nil {
 			return nil, fmt.Errorf("jump host dial failed: %w", err)
 		}
-		ncc, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, config)
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("jump client handshake failed: %w", err)
-		}
-		client = ssh.NewClient(ncc, chans, reqs)
 	} else {
-		// Direct dial
+		// Direct dial with TCP keepalive
+		dialer := &net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: keepAliveDur,
+		}
 		var err error
-		client, err = ssh.Dial("tcp", targetAddr, config)
+		conn, err = dialer.DialContext(ctx, "tcp", targetAddr)
 		if err != nil {
 			return nil, fmt.Errorf("ssh dial failed: %w", err)
 		}
 	}
+
+	ncc, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, config)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("ssh client handshake failed: %w", err)
+	}
+	client = ssh.NewClient(ncc, chans, reqs)
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -165,16 +188,20 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 
 	ctx, cancel := context.WithCancel(ctx)
 	s := &SSHSession{
-		client:         client,
-		session:        session,
-		ptyBridge:      bridge,
-		forwardManager: fwdMgr,
-		ctx:            ctx,
-		cancel:         cancel,
+		client:            client,
+		session:           session,
+		ptyBridge:         bridge,
+		forwardManager:    fwdMgr,
+		ctx:               ctx,
+		cancel:            cancel,
+		keepAliveInterval: keepAliveDur,
+		keepAliveCountMax: keepAliveMax,
 	}
 
-	// Start KeepAlive loop
-	go s.keepAliveLoop()
+	// Start KeepAlive loop if interval > 0
+	if keepAliveDur > 0 {
+		go s.keepAliveLoop()
+	}
 
 	return s, nil
 }
@@ -228,9 +255,13 @@ func (s *SSHSession) Close() error {
 }
 
 func (s *SSHSession) keepAliveLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	if s.keepAliveInterval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(s.keepAliveInterval)
 	defer ticker.Stop()
 
+	missed := 0
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -244,8 +275,17 @@ func (s *SSHSession) keepAliveLoop() {
 			client := s.client
 			s.mu.Unlock()
 
-			// Send keepalive request
-			_, _, _ = client.SendRequest("keepalive@openssh.com", true, nil)
+			// Send SSH keepalive request
+			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+			if err != nil {
+				missed++
+				if s.keepAliveCountMax > 0 && missed >= s.keepAliveCountMax {
+					_ = s.Close()
+					return
+				}
+			} else {
+				missed = 0
+			}
 		}
 	}
 }

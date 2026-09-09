@@ -325,7 +325,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	editMenu, _ := gtk.MenuNew()
 	mEdit.SetSubmenu(editMenu)
 
-	mGlobalSearch, _ := gtk.MenuItemNewWithLabel("Глобальный поиск по всем сессиям (Ctrl+Shift+Alt+F)")
+	mGlobalSearch, _ := gtk.MenuItemNewWithLabel("Глобальный поиск по всем сессиям")
 	mGlobalSearch.Connect("activate", func() {
 		ShowGlobalSearchDialog(app.Window, app.manager, func(sessionID string) {
 			// Select tab
@@ -363,7 +363,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	viewMenu.Append(mToggleBroadcast)
 
-	mToggleNotes, _ := gtk.MenuItemNewWithLabel("Панель заметок (Ctrl+Shift+N)")
+	mToggleNotes, _ := gtk.MenuItemNewWithLabel("Панель заметок")
 	mToggleNotes.Connect("activate", func() {
 		app.ToggleNotesPanel()
 	})
@@ -481,7 +481,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	// 6. Global Search
 	btnSearch, _ := gtk.ToolButtonNew(nil, "Поиск по всем сессиям")
 	btnSearch.SetIconName("edit-find-symbolic")
-	btnSearch.SetTooltipText("Глобальный поиск текста по всем открытым сессиям и вкладкам (Ctrl+Shift+Alt+F)")
+	btnSearch.SetTooltipText("Глобальный поиск текста по всем открытым сессиям и вкладкам")
 	btnSearch.Connect("clicked", func() {
 		ShowGlobalSearchDialog(app.Window, app.manager, nil)
 	})
@@ -490,7 +490,7 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	// 7. Toggle Notes Panel
 	btnNotes, _ := gtk.ToolButtonNew(nil, "Заметки")
 	btnNotes.SetIconName("x-office-document-symbolic")
-	btnNotes.SetTooltipText("Показать / скрыть панель заметок (Ctrl+Shift+N)")
+	btnNotes.SetTooltipText("Показать / скрыть панель заметок")
 	btnNotes.Connect("clicked", func() {
 		app.ToggleNotesPanel()
 	})
@@ -645,18 +645,7 @@ func (app *AppWindow) setupSignals() {
 		}
 	}
 
-	// Keyboard shortcut: Ctrl+Shift+N to toggle Notes panel
-	app.Window.Connect("key-press-event", func(_ *gtk.Window, event *gdk.Event) bool {
-		keyEvent := gdk.EventKeyNewFromEvent(event)
-		state := keyEvent.State()
-		if (state&uint(gdk.CONTROL_MASK) != 0) && (state&uint(gdk.SHIFT_MASK) != 0) {
-			if keyEvent.KeyVal() == gdk.KEY_N || keyEvent.KeyVal() == gdk.KEY_n {
-				app.ToggleNotesPanel()
-				return true
-			}
-		}
-		return false
-	})
+
 
 	app.Window.Connect("delete-event", func() bool {
 		app.Quit()

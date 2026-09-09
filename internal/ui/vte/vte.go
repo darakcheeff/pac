@@ -47,18 +47,7 @@ static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gp
 }
 
 static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
-    // Intercept Ctrl+Shift+C (Copy) and Ctrl+Shift+V (Paste)
-    if ((event->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) {
-        if (event->keyval == GDK_KEY_C || event->keyval == GDK_KEY_c) {
-            vte_terminal_copy_clipboard_format(VTE_TERMINAL(widget), VTE_FORMAT_TEXT);
-            return TRUE;
-        }
-        if (event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_v) {
-            vte_terminal_paste_clipboard(VTE_TERMINAL(widget));
-            return TRUE;
-        }
-    }
-
+    // Pass all keys cleanly to VTE without client interception
     // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
     if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
         return FALSE;

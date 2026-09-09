@@ -92,6 +92,11 @@ func NewTabView() (*TabView, error) {
 		items:    make([]*TabItem, 0),
 	}
 
+	nb.AddEvents(int(gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
+	nb.Connect("scroll-event", func(_ *gtk.Notebook, event *gdk.Event) bool {
+		return tv.handleTabScroll(event, true)
+	})
+
 	nb.Connect("switch-page", func(_ *gtk.Notebook, page *gtk.Widget, pageNum uint) {
 		item := tv.GetCurrentTab()
 		if item != nil {
@@ -167,7 +172,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 
 	// EventBox wrapper for tab header
 	eventBox, _ := gtk.EventBoxNew()
-	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK))
+	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK | gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
 
 	tabBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
 	tabBox.SetMarginStart(2)
@@ -181,7 +186,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 
 	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_MENU)
 	closeBtn.SetRelief(gtk.RELIEF_NONE)
-	closeBtn.SetTooltipText("Закрыть вкладку (Ctrl+W)")
+	closeBtn.SetTooltipText("Закрыть вкладку")
 	tabBox.PackEnd(closeBtn, false, false, 0)
 
 	eventBox.Add(tabBox)
@@ -212,6 +217,10 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		tv.CloseTab(item)
 	})
 
+	eventBox.Connect("scroll-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		return tv.handleTabScroll(event, false)
+	})
+
 	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		if btnEvent.Type() == gdk.EVENT_2BUTTON_PRESS && btnEvent.Button() == gdk.BUTTON_PRIMARY {
@@ -227,6 +236,52 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	tv.Notebook.SetCurrentPage(pageNum)
 	term.GrabFocus()
 	return item, nil
+}
+
+// handleTabScroll cycles through open tabs using mouse wheel over tab headers or tab bar
+func (tv *TabView) handleTabScroll(event *gdk.Event, checkY bool) bool {
+	scrollEvent := gdk.EventScrollNewFromEvent(event)
+	// If checkY is true, only handle scrolls within notebook tab strip (top 50px)
+	if checkY && scrollEvent.Y() > 50 {
+		return false
+	}
+
+	nPages := tv.Notebook.GetNPages()
+	if nPages <= 1 {
+		return false
+	}
+
+	curr := tv.Notebook.GetCurrentPage()
+	var dir int // -1 for previous, +1 for next
+
+	switch scrollEvent.Direction() {
+	case gdk.SCROLL_UP, gdk.SCROLL_LEFT:
+		dir = -1
+	case gdk.SCROLL_DOWN, gdk.SCROLL_RIGHT:
+		dir = 1
+	case gdk.SCROLL_SMOOTH:
+		dy := scrollEvent.DeltaY()
+		dx := scrollEvent.DeltaX()
+		if dy < -0.01 || dx < -0.01 {
+			dir = -1
+		} else if dy > 0.01 || dx > 0.01 {
+			dir = 1
+		}
+	}
+
+	if dir == 0 {
+		return false
+	}
+
+	nextPage := curr + dir
+	if nextPage < 0 {
+		nextPage = nPages - 1
+	} else if nextPage >= nPages {
+		nextPage = 0
+	}
+
+	tv.Notebook.SetCurrentPage(nextPage)
+	return true
 }
 
 // SplitActiveTab splits the focused pane in the tab (vertical = left/right, horizontal = top/bottom)
@@ -674,7 +729,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mEditSession)
 
 	// 10. Temporary TAB Label change...
-	mRename, _ := gtk.MenuItemNewWithLabel("Temporary TAB Label change...")
+	mRename, _ := gtk.MenuItemNewWithLabel("Переименовать вкладку (Rename TAB)...")
 	mRename.Connect("activate", func() {
 		tv.showRenameDialog(item)
 	})
@@ -743,16 +798,17 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.ShowAll()
 	menu.PopupAtPointer(nil)
 }
+
 func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32) {
 	menu, _ := gtk.MenuNew()
 
-	mCopy, _ := gtk.MenuItemNewWithLabel("Копировать (Ctrl+Shift+C)")
+	mCopy, _ := gtk.MenuItemNewWithLabel("Копировать")
 	mCopy.Connect("activate", func() {
 		pane.Terminal.CopyClipboard()
 	})
 	menu.Append(mCopy)
 
-	mPaste, _ := gtk.MenuItemNewWithLabel("Вставить (Ctrl+Shift+V)")
+	mPaste, _ := gtk.MenuItemNewWithLabel("Вставить")
 	mPaste.Connect("activate", func() {
 		pane.Terminal.PasteClipboard()
 	})
@@ -788,7 +844,7 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	sep2, _ := gtk.SeparatorMenuItemNew()
 	menu.Append(sep2)
 
-	mFind, _ := gtk.MenuItemNewWithLabel("Поиск в терминале... (Ctrl+Shift+F)")
+	mFind, _ := gtk.MenuItemNewWithLabel("Поиск в терминале...")
 	mFind.Connect("activate", func() {
 		pane.Search.Show()
 	})

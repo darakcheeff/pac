@@ -414,6 +414,18 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	chkSFTP.SetActive(host.AutoSFTP)
 	gridJump.Attach(chkSFTP, 1, 2, 1, 1)
 
+	lblKeepAlive, _ := gtk.LabelNew("KeepAlive интервал (сек):")
+	lblKeepAlive.SetHAlign(gtk.ALIGN_END)
+	spinKeepAlive, _ := gtk.SpinButtonNewWithRange(0, 3600, 5)
+	kaVal := host.SSHKeepAliveInterval
+	if kaVal == 0 {
+		kaVal = 15
+	}
+	spinKeepAlive.SetValue(float64(kaVal))
+	spinKeepAlive.SetTooltipText("Интервал отправки SSH/TCP keepalive пакетов (в секундах, 0 - выключено, по умолчанию 15)")
+	gridJump.Attach(lblKeepAlive, 0, 3, 1, 1)
+	gridJump.Attach(spinKeepAlive, 1, 3, 1, 1)
+
 	tabJumpLabel := createTabLabel("Туннелирование и сеть")
 	notebook.AppendPage(gridJump, tabJumpLabel)
 
@@ -662,6 +674,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 
 		host.X11Forwarding = chkX11.GetActive()
 		host.AutoSFTP = chkSFTP.GetActive()
+		host.SSHKeepAliveInterval = int(spinKeepAlive.GetValue())
 		host.TerminalType = comboTermType.GetActiveID()
 		host.FontName = fontBtn.GetFont()
 		host.ColorScheme = comboScheme.GetActiveID()

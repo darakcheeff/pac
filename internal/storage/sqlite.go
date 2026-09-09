@@ -93,6 +93,8 @@ func (s *Store) initSchema() error {
 			proxy_jump_host TEXT,
 			port_forwards TEXT,
 			auto_sftp BOOLEAN DEFAULT 1,
+			ssh_keepalive_interval INTEGER DEFAULT 15,
+			ssh_keepalive_count_max INTEGER DEFAULT 3,
 			serial_port TEXT,
 			serial_baud_rate INTEGER DEFAULT 115200,
 			serial_data_bits INTEGER DEFAULT 8,
@@ -152,6 +154,8 @@ func (s *Store) initSchema() error {
 	s.migrateColumn("hosts", "notes", "TEXT")
 	s.migrateColumn("hosts", "proxy_jump_host", "TEXT")
 	s.migrateColumn("hosts", "port_forwards", "TEXT")
+	s.migrateColumn("hosts", "ssh_keepalive_interval", "INTEGER DEFAULT 15")
+	s.migrateColumn("hosts", "ssh_keepalive_count_max", "INTEGER DEFAULT 3")
 
 	var count int
 	s.db.QueryRow("SELECT COUNT(*) FROM groups WHERE id = 'root'").Scan(&count)
@@ -227,6 +231,7 @@ func (s *Store) DeleteGroup(id string) error {
 
 const hostSelectCols = `id, COALESCE(group_id, 'root'), name, COALESCE(description, ''), protocol, COALESCE(host, ''), COALESCE(port, 22), COALESCE(username, ''), COALESCE(auth_method, 'password'),
 	COALESCE(password, ''), COALESCE(key_path, ''), COALESCE(key_pass, ''), COALESCE(x11_forwarding, 0), COALESCE(proxy_jump_host, ''), COALESCE(port_forwards, '[]'), COALESCE(auto_sftp, 1),
+	COALESCE(ssh_keepalive_interval, 15), COALESCE(ssh_keepalive_count_max, 3),
 	COALESCE(serial_port, ''), COALESCE(serial_baud_rate, 115200), COALESCE(serial_data_bits, 8), COALESCE(serial_stop_bits, 1), COALESCE(serial_parity, 'N'),
 	COALESCE(terminal_type, 'xterm-256color'), COALESCE(font_name, 'Monospace 11'), COALESCE(color_scheme, 'mate'), COALESCE(scrollback_lines, 10000), COALESCE(enable_logging, 0), COALESCE(log_path_format, ''),
 	COALESCE(log_clean_ansi, 1), COALESCE(restore_history, 1), COALESCE(notes, ''), COALESCE(sort_order, 0), created_at, updated_at`
@@ -248,6 +253,7 @@ func (s *Store) GetAllHosts() ([]Host, error) {
 		err := rows.Scan(
 			&h.ID, &h.GroupID, &h.Name, &h.Description, &h.Protocol, &h.Host, &h.Port, &h.Username, &h.AuthMethod,
 			&h.Password, &h.KeyPath, &h.KeyPass, &h.X11Forwarding, &h.ProxyJumpHost, &portForwardsJSON, &h.AutoSFTP,
+			&h.SSHKeepAliveInterval, &h.SSHKeepAliveCountMax,
 			&h.SerialPort, &h.SerialBaudRate, &h.SerialDataBits, &h.SerialStopBits, &h.SerialParity,
 			&h.TerminalType, &h.FontName, &h.ColorScheme, &h.ScrollbackLines, &h.EnableLogging, &h.LogPathFormat,
 			&h.LogCleanANSI, &h.RestoreHistory, &h.Notes, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
@@ -274,6 +280,7 @@ func (s *Store) GetHost(id string) (*Host, error) {
 	err := row.Scan(
 		&h.ID, &h.GroupID, &h.Name, &h.Description, &h.Protocol, &h.Host, &h.Port, &h.Username, &h.AuthMethod,
 		&h.Password, &h.KeyPath, &h.KeyPass, &h.X11Forwarding, &h.ProxyJumpHost, &portForwardsJSON, &h.AutoSFTP,
+		&h.SSHKeepAliveInterval, &h.SSHKeepAliveCountMax,
 		&h.SerialPort, &h.SerialBaudRate, &h.SerialDataBits, &h.SerialStopBits, &h.SerialParity,
 		&h.TerminalType, &h.FontName, &h.ColorScheme, &h.ScrollbackLines, &h.EnableLogging, &h.LogPathFormat,
 		&h.LogCleanANSI, &h.RestoreHistory, &h.Notes, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
@@ -299,13 +306,23 @@ func (s *Store) SaveHost(h *Host) error {
 
 	portForwardsJSON, _ := json.Marshal(h.PortForwards)
 
+	kaInterval := h.SSHKeepAliveInterval
+	if kaInterval == 0 {
+		kaInterval = 15
+	}
+	kaCount := h.SSHKeepAliveCountMax
+	if kaCount == 0 {
+		kaCount = 3
+	}
+
 	query := `INSERT INTO hosts (
 		id, group_id, name, description, protocol, host, port, username, auth_method,
 		password, key_path, key_pass, x11_forwarding, proxy_jump_host, port_forwards, auto_sftp,
+		ssh_keepalive_interval, ssh_keepalive_count_max,
 		serial_port, serial_baud_rate, serial_data_bits, serial_stop_bits, serial_parity,
 		terminal_type, font_name, color_scheme, scrollback_lines, enable_logging, log_path_format,
 		log_clean_ansi, restore_history, notes, sort_order, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		group_id = excluded.group_id,
 		name = excluded.name,
@@ -322,6 +339,8 @@ func (s *Store) SaveHost(h *Host) error {
 		proxy_jump_host = excluded.proxy_jump_host,
 		port_forwards = excluded.port_forwards,
 		auto_sftp = excluded.auto_sftp,
+		ssh_keepalive_interval = excluded.ssh_keepalive_interval,
+		ssh_keepalive_count_max = excluded.ssh_keepalive_count_max,
 		serial_port = excluded.serial_port,
 		serial_baud_rate = excluded.serial_baud_rate,
 		serial_data_bits = excluded.serial_data_bits,
@@ -342,6 +361,7 @@ func (s *Store) SaveHost(h *Host) error {
 	_, err := s.db.Exec(query,
 		h.ID, h.GroupID, h.Name, h.Description, h.Protocol, h.Host, h.Port, h.Username, h.AuthMethod,
 		h.Password, h.KeyPath, h.KeyPass, h.X11Forwarding, h.ProxyJumpHost, string(portForwardsJSON), h.AutoSFTP,
+		kaInterval, kaCount,
 		h.SerialPort, h.SerialBaudRate, h.SerialDataBits, h.SerialStopBits, h.SerialParity,
 		h.TerminalType, h.FontName, h.ColorScheme, h.ScrollbackLines, h.EnableLogging, h.LogPathFormat,
 		h.LogCleanANSI, h.RestoreHistory, h.Notes, h.SortOrder, h.CreatedAt, h.UpdatedAt,

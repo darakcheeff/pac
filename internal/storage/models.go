@@ -63,10 +63,12 @@ type Host struct {
 	KeyPass     string      `json:"key_pass,omitempty"`
 
 	// SSH advanced options
-	X11Forwarding bool          `json:"x11_forwarding"`
-	ProxyJumpHost string        `json:"proxy_jump_host"`
-	PortForwards  []PortForward `json:"port_forwards"`
-	AutoSFTP      bool          `json:"auto_sftp"`
+	X11Forwarding        bool          `json:"x11_forwarding"`
+	ProxyJumpHost        string        `json:"proxy_jump_host"`
+	PortForwards         []PortForward `json:"port_forwards"`
+	AutoSFTP             bool          `json:"auto_sftp"`
+	SSHKeepAliveInterval int           `json:"ssh_keepalive_interval"` // Interval in seconds (default 15, 0 to disable)
+	SSHKeepAliveCountMax int           `json:"ssh_keepalive_count_max"` // Max missed keepalives before drop (default 3)
 
 	// Serial options
 	SerialPort     string `json:"serial_port"`
