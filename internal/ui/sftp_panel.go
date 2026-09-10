@@ -90,6 +90,9 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	listStore, _ := gtk.ListStoreNew(glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_BOOLEAN, glib.TYPE_STRING)
 	treeView, _ := gtk.TreeViewNewWithModel(listStore)
 	treeView.SetHeadersVisible(true)
+	if sel, err := treeView.GetSelection(); err == nil {
+		sel.SetMode(gtk.SELECTION_MULTIPLE)
+	}
 
 	// Column: Icon + Name
 	colName, _ := gtk.TreeViewColumnNew()
@@ -190,14 +193,40 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		}
 	})
 
+	// Keyboard shortcuts (F2: Rename, Delete: Remove, F5: Refresh, F7: New folder)
+	treeView.Connect("key-press-event", func(tv *gtk.TreeView, event *gdk.Event) bool {
+		keyEvent := gdk.EventKeyNewFromEvent(event)
+		switch keyEvent.KeyVal() {
+		case gdk.KEY_F2:
+			panel.renameSelectedFile()
+			return true
+		case gdk.KEY_Delete, gdk.KEY_KP_Delete:
+			panel.deleteSelectedFiles()
+			return true
+		case gdk.KEY_F5:
+			if panel.client != nil {
+				panel.LoadDirectory(panel.client.CurrentDir())
+			}
+			return true
+		case gdk.KEY_F7:
+			panel.showCreateFolderDialog()
+			return true
+		}
+		return false
+	})
+
 	// Right click context menu
 	treeView.Connect("button-press-event", func(tv *gtk.TreeView, event *gdk.Event) bool {
+		tv.GrabFocus()
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			path, _, _, _, ok := tv.GetPathAtPos(int(btnEvent.X()), int(btnEvent.Y()))
 			if ok && path != nil {
 				if sel, err := tv.GetSelection(); err == nil {
-					sel.SelectPath(path)
+					if !sel.PathIsSelected(path) {
+						sel.UnselectAll()
+						sel.SelectPath(path)
+					}
 				}
 				iter, _ := listStore.GetIter(path)
 				panel.showContextMenu(iter, btnEvent.Time())
@@ -234,10 +263,11 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	})
 
 	downloadBtn.Connect("clicked", func() {
-		if sel, err := treeView.GetSelection(); err == nil {
-			if _, iter, ok := sel.GetSelected(); ok {
-				panel.downloadSelectedFile(iter)
-			}
+		files := panel.getSelectedFiles()
+		if len(files) == 1 {
+			panel.downloadSelectedFile(files[0].iter)
+		} else if len(files) > 1 {
+			panel.downloadMultipleFiles(files)
 		}
 	})
 
@@ -450,6 +480,7 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 	dlg.SetDefault(btnOk)
 
 	dlg.ShowAll()
+	dlg.Present()
 
 	if dlg.Run() == gtk.RESPONSE_OK {
 		folderName, _ := entry.GetText()
@@ -466,12 +497,11 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 	dlg.Destroy()
 }
 
-func (sp *SFTPPanel) showRenameDialog(iter *gtk.TreeIter) {
+func (sp *SFTPPanel) showRenameDialog(oldName string) {
 	if sp.client == nil {
 		return
 	}
-	valName, _ := sp.ListStore.GetValue(iter, SFTPColName)
-	oldName, _ := valName.GetString()
+
 	oldPath := filepath.Join(sp.client.CurrentDir(), oldName)
 
 	dlg, _ := gtk.DialogNew()
@@ -502,6 +532,7 @@ func (sp *SFTPPanel) showRenameDialog(iter *gtk.TreeIter) {
 	dlg.SetDefault(btnOk)
 
 	dlg.ShowAll()
+	dlg.Present()
 
 	if dlg.Run() == gtk.RESPONSE_OK {
 		newName, _ := entry.GetText()
@@ -546,7 +577,163 @@ func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
 	_ = sp.watcherMgr.OpenForEditing(sp.currentHostID, remotePath, downloadFn, uploadFn, sp.editorPref)
 }
 
+type sftpSelectedFile struct {
+	name  string
+	isDir bool
+	path  string
+	iter  *gtk.TreeIter
+}
+
+func (sp *SFTPPanel) getSelectedFiles() []sftpSelectedFile {
+	sel, err := sp.TreeView.GetSelection()
+	if err != nil {
+		return nil
+	}
+	var files []sftpSelectedFile
+	sel.SelectedForEach(func(model *gtk.TreeModel, path *gtk.TreePath, iter *gtk.TreeIter) {
+		valName, _ := sp.ListStore.GetValue(iter, SFTPColName)
+		nameStr, _ := valName.GetString()
+		valIsDir, _ := sp.ListStore.GetValue(iter, SFTPColIsDir)
+		isDirVal, _ := valIsDir.GoValue()
+		isDir, _ := isDirVal.(bool)
+		if nameStr != "" && sp.client != nil {
+			remotePath := filepath.Join(sp.client.CurrentDir(), nameStr)
+			files = append(files, sftpSelectedFile{
+				name:  nameStr,
+				isDir: isDir,
+				path:  remotePath,
+				iter:  iter,
+			})
+		}
+	})
+	return files
+}
+
+func (sp *SFTPPanel) renameSelectedFile() {
+	files := sp.getSelectedFiles()
+	if len(files) != 1 {
+		return
+	}
+	sp.showRenameDialog(files[0].name)
+}
+
+func (sp *SFTPPanel) deleteSelectedFiles() {
+	if sp.client == nil {
+		return
+	}
+	files := sp.getSelectedFiles()
+	if len(files) == 0 {
+		return
+	}
+
+	var confirmMsg string
+	if len(files) == 1 {
+		confirmMsg = i18n.Tf("Вы уверены, что хотите удалить '%s'?", "Are you sure you want to delete '%s'?", files[0].name)
+	} else {
+		confirmMsg = i18n.Tf("Вы уверены, что хотите удалить выбранные элементы (%d шт.)?", "Are you sure you want to delete selected items (%d)?", len(files))
+	}
+
+	dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", confirmMsg)
+	if dlg.Run() == gtk.RESPONSE_YES {
+		dlg.Destroy()
+		sp.StatusLabel.SetText(i18n.T("Удаление...", "Deleting..."))
+		go func() {
+			var errCount int
+			for _, f := range files {
+				if err := sp.client.Remove(f.path); err != nil {
+					errCount++
+				}
+			}
+			glib.IdleAdd(func() {
+				if errCount > 0 {
+					sp.StatusLabel.SetText(i18n.Tf("Ошибок при удалении: %d", "Errors while deleting: %d", errCount))
+				} else {
+					sp.StatusLabel.SetText(i18n.T("Удаление завершено", "Deletion completed"))
+				}
+				sp.LoadDirectory(sp.client.CurrentDir())
+			})
+		}()
+	} else {
+		dlg.Destroy()
+	}
+}
+
+func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
+	if sp.client == nil || len(files) == 0 {
+		return
+	}
+	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
+		i18n.T("Выберите папку для сохранения файлов", "Select destination folder to save files"),
+		nil,
+		gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
+		i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+		i18n.T("Выбрать", "Select"), gtk.RESPONSE_ACCEPT,
+	)
+	if dlg.Run() == gtk.RESPONSE_ACCEPT {
+		targetDir := dlg.GetFilename()
+		sp.StatusLabel.SetText(i18n.T("Скачивание файлов...", "Downloading files..."))
+		go func() {
+			for _, f := range files {
+				if f.isDir {
+					continue
+				}
+				localDest := filepath.Join(targetDir, f.name)
+				glib.IdleAdd(func() {
+				sp.StatusLabel.SetText(i18n.T("Скачивание: ", "Downloading: ") + f.name)
+				})
+				_ = sp.client.DownloadFile(context.Background(), f.path, localDest, nil)
+			}
+			glib.IdleAdd(func() {
+				sp.StatusLabel.SetText(i18n.T("Скачивание завершено", "Download completed"))
+			})
+		}()
+	}
+	dlg.Destroy()
+}
+
 func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
+	selectedFiles := sp.getSelectedFiles()
+	if len(selectedFiles) > 1 {
+		menu, _ := gtk.MenuNew()
+
+		mDownload, _ := gtk.MenuItemNewWithLabel(i18n.Tf("Скачать выбранные файлы (%d)...", "Download selected files (%d)...", len(selectedFiles)))
+		mDownload.Connect("activate", func() {
+			sp.downloadMultipleFiles(selectedFiles)
+		})
+		menu.Append(mDownload)
+
+		mDelete, _ := gtk.MenuItemNewWithLabel(i18n.Tf("Удалить выбранные элементы (%d шт.) (Delete)", "Delete selected items (%d) (Delete)", len(selectedFiles)))
+		mDelete.Connect("activate", func() {
+			sp.deleteSelectedFiles()
+		})
+		menu.Append(mDelete)
+
+		sep, _ := gtk.SeparatorMenuItemNew()
+		menu.Append(sep)
+
+		mUpload, _ := gtk.MenuItemNewWithLabel(i18n.T("Выгрузить файл на сервер (Upload)...", "Upload file to server..."))
+		mUpload.Connect("activate", func() {
+			sp.showUploadFileChooser()
+		})
+		menu.Append(mUpload)
+
+		mMkdir, _ := gtk.MenuItemNewWithLabel(i18n.T("Создать новую папку (F7)...", "Create new folder (F7)..."))
+		mMkdir.Connect("activate", func() {
+			sp.showCreateFolderDialog()
+		})
+		menu.Append(mMkdir)
+
+		mRefresh, _ := gtk.MenuItemNewWithLabel(i18n.T("Обновить каталог (F5)", "Refresh directory (F5)"))
+		mRefresh.Connect("activate", func() {
+			sp.LoadDirectory(sp.client.CurrentDir())
+		})
+		menu.Append(mRefresh)
+
+		menu.ShowAll()
+		menu.PopupAtPointer(nil)
+		return
+	}
+
 	valName, _ := sp.ListStore.GetValue(iter, SFTPColName)
 	nameStr, _ := valName.GetString()
 	valIsDir, _ := sp.ListStore.GetValue(iter, SFTPColIsDir)
@@ -573,19 +760,13 @@ func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 
 	mRename, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать (F2)", "Rename (F2)"))
 	mRename.Connect("activate", func() {
-		sp.showRenameDialog(iter)
-	})
+		sp.showRenameDialog(nameStr)
+		})
 	menu.Append(mRename)
 
 	mDelete, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить (Delete)", "Delete (Delete)"))
 	mDelete.Connect("activate", func() {
-		dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO,
-			"%s", i18n.Tf("Вы уверены, что хотите удалить '%s'?", "Are you sure you want to delete '%s'?", nameStr))
-		if dlg.Run() == gtk.RESPONSE_YES {
-			_ = sp.client.Remove(remotePath)
-			sp.LoadDirectory(sp.client.CurrentDir())
-		}
-		dlg.Destroy()
+		sp.deleteSelectedFiles()
 	})
 	menu.Append(mDelete)
 

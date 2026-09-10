@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"time"
@@ -171,11 +172,42 @@ func (c *Client) Mkdir(remotePath string) error {
 	return c.sftpClient.MkdirAll(remotePath)
 }
 
-// Remove deletes remote file or empty directory
+// Remove deletes remote file or directory (recursively if non-empty)
 func (c *Client) Remove(remotePath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.sftpClient.Remove(remotePath)
+	if c.sftpClient == nil {
+		return fmt.Errorf("sftp client not connected")
+	}
+	err := c.sftpClient.Remove(remotePath)
+	if err == nil {
+		return nil
+	}
+	errDir := c.sftpClient.RemoveDirectory(remotePath)
+	if errDir == nil {
+		return nil
+	}
+	return c.removeRecursive(remotePath)
+}
+
+func (c *Client) removeRecursive(remotePath string) error {
+	entries, err := c.sftpClient.ReadDir(remotePath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		subPath := path.Join(remotePath, entry.Name())
+		if entry.IsDir() {
+			if err := c.removeRecursive(subPath); err != nil {
+				return err
+			}
+		} else {
+			if err := c.sftpClient.Remove(subPath); err != nil {
+				return err
+			}
+		}
+	}
+	return c.sftpClient.RemoveDirectory(remotePath)
 }
 
 // Rename renames or moves remote file

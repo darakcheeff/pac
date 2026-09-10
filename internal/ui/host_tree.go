@@ -32,6 +32,7 @@ type HostTree struct {
 	OnAddHost     func(parentGroupID string)
 	OnAddGroup    func(parentGroupID string)
 	OnRenameGroup func(groupID string)
+	OnRenameHost  func(hostID string)
 	OnImportOld   func()
 
 	collapsedGroups map[string]bool
@@ -57,6 +58,9 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	}
 	treeView.SetHeadersVisible(false)
 	treeView.SetEnableTreeLines(true)
+	if sel, err := treeView.GetSelection(); err == nil {
+		sel.SetMode(gtk.SELECTION_MULTIPLE)
+	}
 
 	// Column: Icon + Name
 	col, _ := gtk.TreeViewColumnNew()
@@ -140,14 +144,32 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 		}
 	})
 
+	// Keyboard shortcuts (F2: Rename, Delete: Remove)
+	treeView.Connect("key-press-event", func(tv *gtk.TreeView, event *gdk.Event) bool {
+		keyEvent := gdk.EventKeyNewFromEvent(event)
+		switch keyEvent.KeyVal() {
+		case gdk.KEY_F2:
+			ht.RenameSelected()
+			return true
+		case gdk.KEY_Delete, gdk.KEY_KP_Delete:
+			ht.DeleteSelected()
+			return true
+		}
+		return false
+	})
+
 	// Right click context menu
 	treeView.Connect("button-press-event", func(tv *gtk.TreeView, event *gdk.Event) bool {
+		tv.GrabFocus()
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			path, _, _, _, ok := tv.GetPathAtPos(int(btnEvent.X()), int(btnEvent.Y()))
 			if ok && path != nil {
 				if sel, err := tv.GetSelection(); err == nil {
-					sel.SelectPath(path)
+					if !sel.PathIsSelected(path) {
+						sel.UnselectAll()
+						sel.SelectPath(path)
+					}
 				}
 				iter, _ := treeStore.GetIter(path)
 				ht.showContextMenu(iter, btnEvent.Time())
@@ -256,7 +278,103 @@ func (ht *HostTree) Reload() {
 	}
 }
 
+type TreeSelectedItem struct {
+	ID   string
+	Name string
+	Type string // "group" or "host"
+}
+
+func (ht *HostTree) GetSelectedItems() []TreeSelectedItem {
+	sel, err := ht.TreeView.GetSelection()
+	if err != nil {
+		return nil
+	}
+	var items []TreeSelectedItem
+	sel.SelectedForEach(func(model *gtk.TreeModel, path *gtk.TreePath, iter *gtk.TreeIter) {
+		valType, _ := ht.TreeStore.GetValue(iter, ColType)
+		typeStr, _ := valType.GetString()
+		valID, _ := ht.TreeStore.GetValue(iter, ColID)
+		idStr, _ := valID.GetString()
+		valName, _ := ht.TreeStore.GetValue(iter, ColName)
+		nameStr, _ := valName.GetString()
+		if idStr != "" {
+			items = append(items, TreeSelectedItem{
+				ID:   idStr,
+				Name: nameStr,
+				Type: typeStr,
+			})
+		}
+	})
+	return items
+}
+
+func (ht *HostTree) RenameSelected() {
+	items := ht.GetSelectedItems()
+	if len(items) == 0 {
+		return
+	}
+	item := items[0]
+	if item.Type == "host" {
+		if ht.OnRenameHost != nil {
+			ht.OnRenameHost(item.ID)
+		}
+	} else if item.Type == "group" {
+		if item.ID != "root" && ht.OnRenameGroup != nil {
+			ht.OnRenameGroup(item.ID)
+		}
+	}
+}
+
+func (ht *HostTree) DeleteSelected() {
+	items := ht.GetSelectedItems()
+	if len(items) == 0 {
+		return
+	}
+	var validItems []TreeSelectedItem
+	for _, it := range items {
+		if it.ID != "root" {
+			validItems = append(validItems, it)
+		}
+	}
+	if len(validItems) == 0 {
+		return
+	}
+
+	var confirmMsg string
+	if len(validItems) == 1 {
+		confirmMsg = i18n.Tf("Вы уверены, что хотите удалить '%s'?", "Are you sure you want to delete '%s'?", validItems[0].Name)
+	} else {
+		confirmMsg = i18n.Tf("Вы уверены, что хотите удалить выбранные элементы (%d шт.)?", "Are you sure you want to delete selected items (%d)?", len(validItems))
+	}
+
+	dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", confirmMsg)
+	if dlg.Run() == gtk.RESPONSE_YES {
+		for _, it := range validItems {
+			if it.Type == "host" {
+				_ = ht.store.DeleteHost(it.ID)
+			} else if it.Type == "group" {
+				_ = ht.store.DeleteGroup(it.ID)
+			}
+		}
+		ht.Reload()
+	}
+	dlg.Destroy()
+}
+
 func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
+	selectedItems := ht.GetSelectedItems()
+	if len(selectedItems) > 1 {
+		menu, _ := gtk.MenuNew()
+		mDel, _ := gtk.MenuItemNewWithLabel(i18n.Tf("Удалить выбранные элементы (%d шт.) (Delete)", "Delete selected items (%d) (Delete)", len(selectedItems)))
+		mDel.Connect("activate", func() {
+			ht.DeleteSelected()
+		})
+		menu.Append(mDel)
+		menu.ShowAll()
+		menu.PopupAtPointer(nil)
+		return
+	}
+
 	typeStr := "group"
 	idStr := "root"
 	if iter != nil {
@@ -294,6 +412,13 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		})
 		menu.Append(mEdit)
 
+		// Rename item (F2)
+		mRename, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать (F2)", "Rename (F2)"))
+		mRename.Connect("activate", func() {
+			ht.RenameSelected()
+		})
+		menu.Append(mRename)
+
 		// Duplicate item
 		mDup, _ := gtk.MenuItemNewWithLabel(i18n.T("Дублировать хост", "Duplicate Host"))
 		mDup.Connect("activate", func() {
@@ -309,10 +434,9 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 		menu.Append(sep)
 
 		// Delete item
-		mDel, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить", "Delete"))
+		mDel, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить (Delete)", "Delete (Delete)"))
 		mDel.Connect("activate", func() {
-			_ = ht.store.DeleteHost(host.ID)
-			ht.Reload()
+			ht.DeleteSelected()
 		})
 		menu.Append(mDel)
 
@@ -353,18 +477,15 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 			sep, _ := gtk.SeparatorMenuItemNew()
 			menu.Append(sep)
 
-			mRenameGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать папку", "Rename Folder"))
+			mRenameGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать папку (F2)", "Rename Folder (F2)"))
 			mRenameGroup.Connect("activate", func() {
-			if ht.OnRenameGroup != nil {
-				ht.OnRenameGroup(idStr)
-			}
+				ht.RenameSelected()
 			})
 			menu.Append(mRenameGroup)
 
-			mDelGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить папку", "Delete Folder"))
+			mDelGroup, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить папку (Delete)", "Delete Folder (Delete)"))
 			mDelGroup.Connect("activate", func() {
-				_ = ht.store.DeleteGroup(idStr)
-				ht.Reload()
+				ht.DeleteSelected()
 			})
 			menu.Append(mDelGroup)
 		}

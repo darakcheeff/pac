@@ -458,6 +458,20 @@ func (app *AppWindow) setupSignals() {
 		app.HostTree.Reload()
 	}
 
+	app.HostTree.OnRenameHost = func(hostID string) {
+		h, err := app.store.GetHost(hostID)
+		if err != nil || h == nil {
+			return
+		}
+		name, ok := promptInputDialog(app.Window, i18n.T("Переименовать подключение", "Rename Connection"), i18n.T("Имя подключения:", "Connection name:"), h.Name)
+		if !ok || name == "" || name == h.Name {
+			return
+		}
+		h.Name = name
+		_ = app.store.SaveHost(h)
+		app.HostTree.Reload()
+	}
+
 	app.HostTree.OnImportOld = func() {
 		configPath := migration.FindLegacyConfigPath()
 		if configPath == "" {
@@ -1232,8 +1246,8 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 	}
 }
 
-// promptFolderDialog shows a modal input dialog to specify or rename a folder
-func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, bool) {
+// promptInputDialog shows a modal input dialog to specify or rename a string value
+func promptInputDialog(parent gtk.IWindow, title, labelText, defaultValue string) (string, bool) {
 	dlg, err := gtk.DialogNew()
 	if err != nil {
 		return "", false
@@ -1258,12 +1272,12 @@ func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, 
 	contentArea.SetMarginTop(12)
 	contentArea.SetMarginBottom(12)
 
-	lbl, _ := gtk.LabelNew(i18n.T("Имя папки:", "Folder name:"))
+	lbl, _ := gtk.LabelNew(labelText)
 	lbl.SetXAlign(0)
 	contentArea.Add(lbl)
 
 	entry, _ := gtk.EntryNew()
-	entry.SetText(defaultName)
+	entry.SetText(defaultValue)
 	entry.SetActivatesDefault(true)
 	contentArea.Add(entry)
 
@@ -1274,12 +1288,17 @@ func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, 
 
 	dlg.ShowAll()
 	response := dlg.Run()
-	name, _ := entry.GetText()
-	name = strings.TrimSpace(name)
+	val, _ := entry.GetText()
+	val = strings.TrimSpace(val)
 	dlg.Destroy()
 
-	if response == gtk.RESPONSE_OK && name != "" {
-		return name, true
+	if response == gtk.RESPONSE_OK && val != "" {
+		return val, true
 	}
 	return "", false
+}
+
+// promptFolderDialog shows a modal input dialog to specify or rename a folder
+func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, bool) {
+	return promptInputDialog(parent, title, i18n.T("Имя папки:", "Folder name:"), defaultName)
 }
