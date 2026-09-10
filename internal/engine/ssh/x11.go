@@ -1,7 +1,9 @@
 package ssh
 
 import (
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -16,8 +18,19 @@ import (
 func SetupX11Forwarding(client *ssh.Client, session *ssh.Session) error {
 	display := os.Getenv("DISPLAY")
 	if display == "" {
-		display = ":0"
+		if matches, err := filepath.Glob("/tmp/.X11-unix/X*"); err == nil && len(matches) > 0 {
+			num := strings.TrimPrefix(filepath.Base(matches[0]), "X")
+			display = ":" + num
+		} else {
+			display = ":0"
+		}
 	}
+
+	cookie := make([]byte, 16)
+	if _, err := rand.Read(cookie); err != nil {
+		cookie = []byte("0123456789abcdef")
+	}
+	cookieHex := hex.EncodeToString(cookie)
 
 	// Request X11 forwarding on session
 	req := struct {
@@ -28,7 +41,7 @@ func SetupX11Forwarding(client *ssh.Client, session *ssh.Session) error {
 	}{
 		SingleConnection: false,
 		AuthProtocol:     "MIT-MAGIC-COOKIE-1",
-		AuthCookie:       "00000000000000000000000000000000",
+		AuthCookie:       cookieHex,
 		ScreenNumber:     0,
 	}
 
@@ -97,6 +110,15 @@ func connectLocalDisplay(display string) (net.Conn, error) {
 	socketPath := filepath.Join("/tmp/.X11-unix", "X"+displayNum)
 	if conn, err := net.Dial("unix", socketPath); err == nil {
 		return conn, nil
+	}
+
+	// Also try any other active sockets in /tmp/.X11-unix/
+	if matches, err := filepath.Glob("/tmp/.X11-unix/X*"); err == nil {
+		for _, m := range matches {
+			if conn, err := net.Dial("unix", m); err == nil {
+				return conn, nil
+			}
+		}
 	}
 
 	// Fallback to TCP port 6000 + displayNum

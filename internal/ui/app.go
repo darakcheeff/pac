@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -45,8 +47,10 @@ type AppWindow struct {
 	manager     *session.Manager
 	watcherMgr  *watcher.RemoteEditManager
 	settings    *storage.AppSettings
-	isRestoring bool
-	restoreMu   sync.Mutex
+	isRestoring   bool
+	restoreMu     sync.Mutex
+	lastSavedHash string
+	lastSavedMu   sync.Mutex
 }
 
 
@@ -233,9 +237,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	app.setupMenuAndToolbar()
 	app.setupSignals()
 
-	// Periodic auto-save of active session state (every 5 seconds with diff checking)
+	// Periodic auto-save of active session state (every 30 seconds with diff checking)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			app.restoreMu.Lock()
@@ -1028,6 +1032,22 @@ func (app *AppWindow) SaveAllSessionState() {
 			states = append(states, st)
 		}
 	}
+	hasher := sha256.New()
+	for _, st := range states {
+		fmt.Fprintf(hasher, "%s|%s|%s|%s|%d|%s|%s|%s|%s|%s;",
+			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex,
+			st.SplitParentID, st.SplitDirection, st.WorkingDir, st.Notes, st.ScrollbackDump)
+	}
+	currentHash := hex.EncodeToString(hasher.Sum(nil))
+
+	app.lastSavedMu.Lock()
+	if currentHash == app.lastSavedHash {
+		app.lastSavedMu.Unlock()
+		return
+	}
+	app.lastSavedHash = currentHash
+	app.lastSavedMu.Unlock()
+
 	log.Printf("[STATE] Saving %d active pane(s) across %d tab(s) to SQLite...", len(states), len(app.TabView.items))
 	_ = app.store.SaveActiveSessions(states)
 }

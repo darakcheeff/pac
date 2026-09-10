@@ -178,9 +178,14 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		return nil, fmt.Errorf("pty request failed: %w", err)
 	}
 
-	// X11 Forwarding if enabled
-	if host.X11Forwarding {
-		_ = SetupX11Forwarding(client, session)
+	// X11 Forwarding if enabled or if local host connection
+	isLocal := host.Host == "127.0.0.1" || host.Host == "localhost" || host.Host == "::1"
+	if host.X11Forwarding || isLocal {
+		if err := SetupX11Forwarding(client, session); err != nil {
+			log.Printf("[SSH] Warning: failed to setup X11 forwarding for %s: %v", host.Name, err)
+		} else {
+			log.Printf("[SSH] X11 forwarding active for %s", host.Name)
+		}
 	}
 
 	// SSH Agent Forwarding (KeePassXC / ssh-agent forwarding)
