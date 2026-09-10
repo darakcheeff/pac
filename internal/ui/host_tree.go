@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/storage"
@@ -93,6 +94,73 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	if val, err := store.GetSetting("tree_collapsed_groups"); err == nil && val != "" {
 		_ = json.Unmarshal([]byte(val), &ht.collapsedGroups)
 	}
+
+	// Drag and Drop (Reordering / moving hosts into folders)
+	dndTarget, _ := gtk.TargetEntryNew("text/plain", 0, 0)
+	treeView.DragSourceSet(gdk.BUTTON1_MASK, []gtk.TargetEntry{*dndTarget}, gdk.ACTION_MOVE)
+	treeView.DragDestSet(gtk.DEST_DEFAULT_ALL, []gtk.TargetEntry{*dndTarget}, gdk.ACTION_MOVE)
+
+	treeView.Connect("drag-data-get", func(tv *gtk.TreeView, ctx *gdk.DragContext, data *gtk.SelectionData, info uint, time uint32) {
+		items := ht.GetSelectedItems()
+		var ids []string
+		for _, it := range items {
+			ids = append(ids, fmt.Sprintf("%s:%s", it.Type, it.ID))
+		}
+		data.SetText(strings.Join(ids, ","))
+	})
+
+	treeView.Connect("drag-data-received", func(tv *gtk.TreeView, ctx *gdk.DragContext, x, y int, data *gtk.SelectionData, info uint, time uint32) {
+		payload := data.GetText()
+		if payload == "" {
+			return
+		}
+
+		targetGroupID := ""
+		path, _, _, _, ok := tv.GetPathAtPos(x, y)
+		if ok && path != nil {
+			if iter, err := ht.TreeStore.GetIter(path); err == nil {
+				valType, _ := ht.TreeStore.GetValue(iter, ColType)
+				typeStr, _ := valType.GetString()
+				valID, _ := ht.TreeStore.GetValue(iter, ColID)
+				idStr, _ := valID.GetString()
+				if typeStr == "group" {
+					if idStr != "root" {
+						targetGroupID = idStr
+					}
+				} else if typeStr == "host" {
+					if h, err := ht.store.GetHost(idStr); err == nil && h != nil {
+						targetGroupID = h.GroupID
+					}
+				}
+			}
+		}
+
+		entries := strings.Split(payload, ",")
+		for _, entry := range entries {
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			itemType, itemID := parts[0], parts[1]
+			if itemType == "host" {
+				if h, err := ht.store.GetHost(itemID); err == nil && h != nil {
+					h.GroupID = targetGroupID
+					_ = ht.store.SaveHost(h)
+				}
+			} else if itemType == "group" {
+				if itemID != "root" && itemID != targetGroupID {
+					if g, err := ht.store.GetGroup(itemID); err == nil && g != nil {
+						if !isDescendantOf(ht.store, targetGroupID, itemID) {
+							g.ParentID = targetGroupID
+							_ = ht.store.SaveGroup(g)
+						}
+					}
+				}
+			}
+		}
+
+		ht.Reload()
+	})
 
 	treeView.Connect("row-collapsed", func(tv *gtk.TreeView, iter *gtk.TreeIter, path *gtk.TreePath) {
 		if ht.isReloading {
@@ -493,4 +561,19 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 
 	menu.ShowAll()
 	menu.PopupAtPointer(nil)
+}
+
+func isDescendantOf(store *storage.Store, candidateGroupID, ancestorGroupID string) bool {
+	curr := candidateGroupID
+	for curr != "" {
+		if curr == ancestorGroupID {
+			return true
+		}
+		g, err := store.GetGroup(curr)
+		if err != nil || g == nil {
+			break
+		}
+		curr = g.ParentID
+	}
+	return false
 }

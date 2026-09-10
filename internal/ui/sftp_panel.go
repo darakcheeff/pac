@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"net/url"
 	"context"
 	"sync"
 	"fmt"
@@ -155,21 +156,93 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		watcherMgr:  watcherMgr,
 	}
 
-	// Setup Drag and Drop Destination (drag files from local file manager into SFTP view to upload)
-	if tEntry, err := gtk.TargetEntryNew("text/uri-list", gtk.TARGET_OTHER_APP, 0); err == nil {
-		treeView.DragDestSet(gtk.DEST_DEFAULT_ALL, []gtk.TargetEntry{*tEntry}, gdk.ACTION_COPY)
-		treeView.Connect("drag-data-received", func(tv *gtk.TreeView, context *gdk.DragContext, x, y int, data *gtk.SelectionData, info uint, time uint32) {
-			uriList := string(data.GetData())
-			lines := strings.Split(uriList, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "file://") {
-					localPath := strings.TrimPrefix(line, "file://")
+	// Setup Drag and Drop: internal moving into folders + external upload from desktop/file manager
+	targetURI, _ := gtk.TargetEntryNew("text/uri-list", 0, 1)
+	targetText, _ := gtk.TargetEntryNew("text/plain", 0, 2)
+	treeView.DragSourceSet(gdk.BUTTON1_MASK, []gtk.TargetEntry{*targetText}, gdk.ACTION_MOVE)
+	treeView.DragDestSet(gtk.DEST_DEFAULT_ALL, []gtk.TargetEntry{*targetURI, *targetText}, gdk.ACTION_COPY|gdk.ACTION_MOVE)
+
+	treeView.Connect("drag-data-get", func(tv *gtk.TreeView, ctx *gdk.DragContext, data *gtk.SelectionData, info uint, time uint32) {
+		files := panel.getSelectedFiles()
+		var names []string
+		for _, f := range files {
+			names = append(names, f.name)
+		}
+		data.SetText(strings.Join(names, "\n"))
+	})
+
+	treeView.Connect("drag-data-received", func(tv *gtk.TreeView, context *gdk.DragContext, x, y int, data *gtk.SelectionData, info uint, time uint32) {
+		if panel.client == nil {
+			return
+		}
+
+		// A. External file drop from desktop / file manager (text/uri-list)
+		uris := data.GetURIs()
+		if len(uris) == 0 {
+			raw := string(data.GetData())
+			lines := strings.Split(raw, "\n")
+			for _, l := range lines {
+				l = strings.TrimSpace(l)
+				if strings.HasPrefix(l, "file://") {
+					uris = append(uris, l)
+				}
+			}
+		}
+
+		if len(uris) > 0 {
+			for _, uStr := range uris {
+				uStr = strings.TrimSpace(uStr)
+				if uStr == "" {
+					continue
+				}
+				u, err := url.Parse(uStr)
+				localPath := ""
+				if err == nil && u.Path != "" {
+					localPath = filepath.Clean(u.Path)
+				} else if strings.HasPrefix(uStr, "file://") {
+					localPath = filepath.Clean(strings.TrimPrefix(uStr, "file://"))
+				}
+				if localPath != "" {
 					panel.UploadLocalFile(localPath)
 				}
 			}
-		})
-	}
+			return
+		}
+
+		// B. Internal drag & drop to move file/folder into a directory
+		text := data.GetText()
+		if text == "" {
+			return
+		}
+		path, _, _, _, ok := tv.GetPathAtPos(x, y)
+		if !ok || path == nil {
+			return
+		}
+		iter, err := listStore.GetIter(path)
+		if err != nil {
+			return
+		}
+		valIsDir, _ := listStore.GetValue(iter, SFTPColIsDir)
+		isDirVal, _ := valIsDir.GoValue()
+		if isDir, ok := isDirVal.(bool); ok && isDir {
+			valName, _ := listStore.GetValue(iter, SFTPColName)
+			targetFolder, _ := valName.GetString()
+			if targetFolder == "" || targetFolder == "." || targetFolder == ".." {
+				return
+			}
+			destDir := filepath.Join(panel.client.CurrentDir(), targetFolder)
+			lines := strings.Split(text, "\n")
+			for _, l := range lines {
+				fName := strings.TrimSpace(l)
+				if fName != "" && fName != targetFolder {
+					oldPath := filepath.Join(panel.client.CurrentDir(), fName)
+					newPath := filepath.Join(destDir, fName)
+					_ = panel.client.Rename(oldPath, newPath)
+				}
+			}
+			panel.LoadDirectory(panel.client.CurrentDir())
+		}
+	})
 
 	// Double click row action
 	treeView.Connect("row-activated", func(tv *gtk.TreeView, path *gtk.TreePath, column *gtk.TreeViewColumn) {

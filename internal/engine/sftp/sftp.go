@@ -31,9 +31,32 @@ type ProgressCallback func(transferred int64, total int64, speedBytesPerSec floa
 type Client struct {
 	sshClient  *ssh.Client
 	sftpClient *sftp.Client
+	isLocal    bool
 	currentDir string
 	mu         sync.RWMutex
 	closed     bool
+}
+
+// NewLocalClient initializes a Client operating on the local filesystem
+func NewLocalClient(initialDir string) *Client {
+	if initialDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			initialDir = home
+		} else {
+			initialDir = "/"
+		}
+	}
+	return &Client{
+		isLocal:    true,
+		currentDir: initialDir,
+	}
+}
+
+// IsLocal returns true if operating on local filesystem
+func (c *Client) IsLocal() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isLocal
 }
 
 // NewClient initializes SFTP client on top of existing SSH client
@@ -74,12 +97,39 @@ func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.closed || c.sftpClient == nil {
-		return nil, fmt.Errorf("sftp client is closed")
+	if c.closed {
+		return nil, fmt.Errorf("client is closed")
 	}
 
 	if remotePath == "" {
 		remotePath = c.currentDir
+	}
+
+	if c.isLocal {
+		entries, err := os.ReadDir(remotePath)
+		if err != nil {
+			return nil, err
+		}
+		var items []FileItem
+		for _, entry := range entries {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			items = append(items, FileItem{
+				Name:    entry.Name(),
+				Path:    filepath.Join(remotePath, entry.Name()),
+				Size:    info.Size(),
+				Mode:    info.Mode(),
+				ModTime: info.ModTime(),
+				IsDir:   entry.IsDir(),
+			})
+		}
+		return items, nil
+	}
+
+	if c.sftpClient == nil {
+		return nil, fmt.Errorf("sftp client is closed")
 	}
 
 	entries, err := c.sftpClient.ReadDir(remotePath)
@@ -106,7 +156,32 @@ func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string,
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.closed || c.sftpClient == nil {
+	if c.closed {
+		return fmt.Errorf("client is closed")
+	}
+
+	if c.isLocal {
+		src, err := os.Open(remotePath)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+		stat, err := src.Stat()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+			return err
+		}
+		dst, err := os.Create(localPath)
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
+		return copyWithProgress(ctx, dst, src, stat.Size(), cb)
+	}
+
+	if c.sftpClient == nil {
 		return fmt.Errorf("sftp client is closed")
 	}
 
@@ -156,6 +231,18 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 	}
 	totalSize := stat.Size()
 
+	if c.isLocal {
+		if err := os.MkdirAll(filepath.Dir(remotePath), 0755); err != nil {
+			return err
+		}
+		dst, err := os.Create(remotePath)
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
+		return copyWithProgress(ctx, dst, src, totalSize, cb)
+	}
+
 	dst, err := c.sftpClient.Create(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %w", err)
@@ -169,6 +256,12 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 func (c *Client) Mkdir(remotePath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.isLocal {
+		return os.MkdirAll(remotePath, 0755)
+	}
+	if c.sftpClient == nil {
+		return fmt.Errorf("sftp client not connected")
+	}
 	return c.sftpClient.MkdirAll(remotePath)
 }
 
@@ -176,6 +269,9 @@ func (c *Client) Mkdir(remotePath string) error {
 func (c *Client) Remove(remotePath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.isLocal {
+		return os.RemoveAll(remotePath)
+	}
 	if c.sftpClient == nil {
 		return fmt.Errorf("sftp client not connected")
 	}
@@ -214,6 +310,12 @@ func (c *Client) removeRecursive(remotePath string) error {
 func (c *Client) Rename(oldPath, newPath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.isLocal {
+		return os.Rename(oldPath, newPath)
+	}
+	if c.sftpClient == nil {
+		return fmt.Errorf("sftp client not connected")
+	}
 	return c.sftpClient.Rename(oldPath, newPath)
 }
 
@@ -221,6 +323,12 @@ func (c *Client) Rename(oldPath, newPath string) error {
 func (c *Client) Chmod(remotePath string, mode os.FileMode) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.isLocal {
+		return os.Chmod(remotePath, mode)
+	}
+	if c.sftpClient == nil {
+		return fmt.Errorf("sftp client not connected")
+	}
 	return c.sftpClient.Chmod(remotePath, mode)
 }
 

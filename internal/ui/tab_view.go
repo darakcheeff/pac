@@ -91,6 +91,7 @@ type TabItem struct {
 type TabView struct {
 	Notebook               *gtk.Notebook
 	items                  []*TabItem
+	lastActiveSession      *session.Session
 	OnTabChanged           func(sess *session.Session)
 	OnTabClosed            func(sess *session.Session)
 	OnSplitRequested       func(sess *session.Session, vertical bool)
@@ -147,11 +148,13 @@ func NewTabView() (*TabView, error) {
 		if item != nil {
 			if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
 				item.FocusedPane.Terminal.GrabFocus()
+				tv.lastActiveSession = item.FocusedPane.Session
 				if tv.OnTabChanged != nil {
 					tv.OnTabChanged(item.FocusedPane.Session)
 				}
 			} else if len(item.Panes) > 0 && item.Panes[0].Terminal != nil {
 				item.Panes[0].Terminal.GrabFocus()
+				tv.lastActiveSession = item.Panes[0].Session
 				if tv.OnTabChanged != nil {
 					tv.OnTabChanged(item.Panes[0].Session)
 				}
@@ -189,7 +192,8 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
 		}
-		if !wasFocused && tv.OnTabChanged != nil {
+		if (!wasFocused || tv.lastActiveSession != sess) && tv.OnTabChanged != nil {
+			tv.lastActiveSession = sess
 			tv.OnTabChanged(sess)
 		}
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
@@ -204,7 +208,8 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
 		}
-		if !wasFocused && tv.OnTabChanged != nil {
+		if (!wasFocused || tv.lastActiveSession != sess) && tv.OnTabChanged != nil {
+			tv.lastActiveSession = sess
 			tv.OnTabChanged(sess)
 		}
 	})
@@ -869,27 +874,11 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	splitSubmenu, _ := gtk.MenuNew()
 
 	mSplitV, _ := gtk.MenuItemNewWithLabel(i18n.T("По вертикали", "Vertically"))
-	mSplitV.Connect("activate", func() {
-		if tv.OnSplitRequested != nil {
-			sess := item.Session
-			if item.FocusedPane != nil && item.FocusedPane.Session != nil {
-				sess = item.FocusedPane.Session
-			}
-			tv.OnSplitRequested(sess, true)
-		}
-	})
+	mSplitV.SetSubmenu(tv.buildSplitSubmenu(item, item.Session, true))
 	splitSubmenu.Append(mSplitV)
 
 	mSplitH, _ := gtk.MenuItemNewWithLabel(i18n.T("По горизонтали", "Horizontally"))
-	mSplitH.Connect("activate", func() {
-		if tv.OnSplitRequested != nil {
-			sess := item.Session
-			if item.FocusedPane != nil && item.FocusedPane.Session != nil {
-				sess = item.FocusedPane.Session
-			}
-			tv.OnSplitRequested(sess, false)
-		}
-	})
+	mSplitH.SetSubmenu(tv.buildSplitSubmenu(item, item.Session, false))
 	splitSubmenu.Append(mSplitH)
 
 	if len(item.Panes) > 1 {
@@ -1043,19 +1032,11 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	menu.Append(sep1)
 
 	mSplitH, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить по горизонтали (сверху / снизу)", "Split horizontally (top / bottom)"))
-	mSplitH.Connect("activate", func() {
-		if tv.OnSplitRequested != nil {
-			tv.OnSplitRequested(pane.Session, false)
-		}
-	})
+	mSplitH.SetSubmenu(tv.buildSplitSubmenu(pane.TabItem, pane.Session, false))
 	menu.Append(mSplitH)
 
 	mSplitV, _ := gtk.MenuItemNewWithLabel(i18n.T("Разделить по вертикали (слева / справа)", "Split vertically (left / right)"))
-	mSplitV.Connect("activate", func() {
-		if tv.OnSplitRequested != nil {
-			tv.OnSplitRequested(pane.Session, true)
-		}
-	})
+	mSplitV.SetSubmenu(tv.buildSplitSubmenu(pane.TabItem, pane.Session, true))
 	menu.Append(mSplitV)
 
 	if len(pane.TabItem.Panes) > 1 {
@@ -1108,4 +1089,168 @@ func (tv *TabView) UpdateSessionForTerminal(term *vte.Terminal, newSess *session
 			}
 		}
 	}
+}
+
+func (tv *TabView) buildSplitSubmenu(currentTab *TabItem, sess *session.Session, vertical bool) *gtk.Menu {
+	sub, _ := gtk.MenuNew()
+
+	mNewTerm, _ := gtk.MenuItemNewWithLabel(i18n.T("Новый терминал", "New terminal"))
+	mNewTerm.Connect("activate", func() {
+		if tv.OnSplitRequested != nil {
+			targetSess := sess
+			if currentTab != nil && currentTab.FocusedPane != nil && currentTab.FocusedPane.Session != nil {
+				targetSess = currentTab.FocusedPane.Session
+			}
+			tv.OnSplitRequested(targetSess, vertical)
+		}
+	})
+	sub.Append(mNewTerm)
+
+	var otherTabs []*TabItem
+	for _, t := range tv.items {
+		if t != currentTab {
+			otherTabs = append(otherTabs, t)
+		}
+	}
+
+	if len(otherTabs) > 0 {
+		sep, _ := gtk.SeparatorMenuItemNew()
+		sub.Append(sep)
+
+		for _, other := range otherTabs {
+			targetOther := other
+			title := "Tab"
+			if targetOther.Session != nil && targetOther.Session.Title != "" {
+				title = targetOther.Session.Title
+			}
+			mOther, _ := gtk.MenuItemNewWithLabel(i18n.Tf("Объединить с вкладкой: %s", "Merge with tab: %s", title))
+			mOther.Connect("activate", func() {
+				_ = tv.MergeTabInto(currentTab, targetOther, vertical)
+			})
+			sub.Append(mOther)
+		}
+	}
+
+	return sub
+}
+
+// MergeTabInto combines sourceTab into targetTab as a split view, closing sourceTab
+func (tv *TabView) MergeTabInto(targetTab, sourceTab *TabItem, vertical bool) error {
+	if targetTab == nil || sourceTab == nil || targetTab == sourceTab {
+		return fmt.Errorf("invalid tabs for merge")
+	}
+
+	targetPane := targetTab.FocusedPane
+	if targetPane == nil && len(targetTab.Panes) > 0 {
+		targetPane = targetTab.Panes[0]
+	}
+	if targetPane == nil {
+		return fmt.Errorf("no target pane")
+	}
+
+	orientation := gtk.ORIENTATION_VERTICAL
+	if vertical {
+		orientation = gtk.ORIENTATION_HORIZONTAL
+	}
+
+	paned, err := gtk.PanedNew(orientation)
+	if err != nil {
+		return err
+	}
+	paned.SetWideHandle(true)
+	paned.SetHExpand(true)
+	paned.SetVExpand(true)
+
+	// Remove sourceTab from Notebook without closing its session
+	sourcePageNum := tv.Notebook.PageNum(sourceTab.ContentBox)
+	if sourcePageNum >= 0 {
+		tv.Notebook.RemovePage(sourcePageNum)
+	}
+
+	// Remove sourceTab from tv.items
+	newItems := make([]*TabItem, 0, len(tv.items)-1)
+	for _, it := range tv.items {
+		if it != sourceTab {
+			newItems = append(newItems, it)
+		}
+	}
+	tv.items = newItems
+
+	var sourceWidget gtk.IWidget
+	if len(sourceTab.Panes) == 1 {
+		sourcePane := sourceTab.Panes[0]
+		sourceTab.ContentBox.Remove(sourcePane.Box)
+		sourcePane.TabItem = targetTab
+		if vertical {
+			sourcePane.SplitDirection = "vertical"
+		} else {
+			sourcePane.SplitDirection = "horizontal"
+		}
+		if targetPane.Session != nil {
+			sourcePane.ParentSessionID = targetPane.Session.ID
+		}
+		targetTab.Panes = append(targetTab.Panes, sourcePane)
+		targetTab.FocusedPane = sourcePane
+		sourceWidget = sourcePane.Box
+	} else {
+		for _, p := range sourceTab.Panes {
+			p.TabItem = targetTab
+			targetTab.Panes = append(targetTab.Panes, p)
+		}
+		if sourceTab.FocusedPane != nil {
+			targetTab.FocusedPane = sourceTab.FocusedPane
+		}
+		sourceWidget = sourceTab.ContentBox
+	}
+
+	parentObj, pErr := targetPane.Box.GetParent()
+	if pErr != nil || parentObj == nil {
+		return fmt.Errorf("cannot get parent of target pane: %v", pErr)
+	}
+
+	if areWidgetsEqual(parentObj, targetTab.ContentBox) {
+		targetTab.ContentBox.Remove(targetPane.Box)
+		paned.Pack1(targetPane.Box, true, false)
+		paned.Pack2(sourceWidget, true, false)
+		targetTab.ContentBox.PackStart(paned, true, true, 0)
+	} else {
+		parentPaned := toPaned(parentObj)
+		c1, _ := parentPaned.GetChild1()
+		if c1 != nil && areWidgetsEqual(c1, targetPane.Box) {
+			parentPaned.Remove(targetPane.Box)
+			paned.Pack1(targetPane.Box, true, false)
+			paned.Pack2(sourceWidget, true, false)
+			parentPaned.Pack1(paned, true, false)
+		} else {
+			parentPaned.Remove(targetPane.Box)
+			paned.Pack1(targetPane.Box, true, false)
+			paned.Pack2(sourceWidget, true, false)
+			parentPaned.Pack2(paned, true, false)
+		}
+	}
+
+	paned.Connect("size-allocate", func() {
+		if vertical {
+			w := paned.GetAllocatedWidth()
+			if w > 40 && paned.GetPosition() <= 10 {
+				paned.SetPosition(w / 2)
+			}
+		} else {
+			h := paned.GetAllocatedHeight()
+			if h > 40 && paned.GetPosition() <= 10 {
+				paned.SetPosition(h / 2)
+			}
+		}
+	})
+
+	targetTab.ContentBox.ShowAll()
+	if targetTab.FocusedPane != nil && targetTab.FocusedPane.Terminal != nil {
+		targetTab.FocusedPane.Terminal.GrabFocus()
+		if tv.OnTabChanged != nil && targetTab.FocusedPane.Session != nil {
+			tv.lastActiveSession = targetTab.FocusedPane.Session
+			tv.OnTabChanged(targetTab.FocusedPane.Session)
+		}
+	}
+
+	return nil
 }

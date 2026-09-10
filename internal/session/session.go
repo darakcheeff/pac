@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"context"
 	"fmt"
 	"io"
@@ -70,6 +71,7 @@ type Session struct {
 	LocalSession  *local.LocalSession
 
 	OnExit func(err error)
+	OnDirectoryChanged func(path string)
 
 	// Ring buffer for scrollback history and global search
 	scrollback   []byte
@@ -124,6 +126,9 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		if sess.SFTPClient != nil {
 			sess.SFTPClient.SetCurrentDir(path)
 		}
+		if sess.OnDirectoryChanged != nil {
+			sess.OnDirectoryChanged(path)
+		}
 	})
 
 	sess.Splitter = &StreamSplitter{
@@ -160,6 +165,7 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		if host.AutoSFTP {
 			if sftpCl, err := sftp.NewClient(sshSess.Client()); err == nil {
 				sess.SFTPClient = sftpCl
+				sess.Tracker.SetHomeDir(sftpCl.CurrentDir())
 			}
 		}
 
@@ -196,6 +202,12 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			return nil, err
 		}
 		sess.LocalSession = lSess
+		initialDir := lSess.CurrentDir()
+		if initialDir == "" {
+			initialDir, _ = os.UserHomeDir()
+		}
+		sess.SFTPClient = sftp.NewLocalClient(initialDir)
+		sess.Tracker.SetHomeDir(initialDir)
 		lSess.OnExit = func(exitErr error) {
 			if sess.OnExit != nil {
 				sess.OnExit(exitErr)
@@ -300,4 +312,10 @@ func (s *Session) Close() error {
 		_ = s.PTY.Close()
 	}
 	return nil
+}
+
+func (s *Session) NotifyDirectory(path string) {
+	if s.Tracker != nil {
+		s.Tracker.NotifyPath(path)
+	}
 }

@@ -47,6 +47,22 @@ static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gp
 }
 
 extern int goOnVteKeyPress(GtkWidget* widget, guint keyval);
+extern void goOnVteDirectoryChanged(GtkWidget* widget, char* uri);
+extern void goOnVteTitleChanged(GtkWidget* widget, char* title);
+
+static void on_vte_directory_uri_changed(VteTerminal* term, gpointer user_data) {
+    const char* uri = vte_terminal_get_current_directory_uri(term);
+    if (uri) {
+        goOnVteDirectoryChanged((GtkWidget*)term, (char*)uri);
+    }
+}
+
+static void on_vte_window_title_changed(VteTerminal* term, gpointer user_data) {
+    const char* title = vte_terminal_get_window_title(term);
+    if (title) {
+        goOnVteTitleChanged((GtkWidget*)term, (char*)title);
+    }
+}
 
 static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
     if (goOnVteKeyPress(widget, event->keyval)) {
@@ -93,6 +109,8 @@ static void configure_vte_terminal(GtkWidget* w) {
 
     g_signal_connect(w, "key-press-event", G_CALLBACK(on_vte_key_press), NULL);
     g_signal_connect(w, "button-press-event", G_CALLBACK(on_vte_button_press), NULL);
+    g_signal_connect(w, "current-directory-uri-changed", G_CALLBACK(on_vte_directory_uri_changed), NULL);
+    g_signal_connect(w, "window-title-changed", G_CALLBACK(on_vte_window_title_changed), NULL);
 }
 
 static int create_vte_native_pty(GtkWidget* term, char* slave_path, size_t slave_path_len, GError** error) {
@@ -188,7 +206,11 @@ import "C"
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -222,6 +244,80 @@ func unregisterTerminal(t *Terminal) {
 	delete(termRegistry, uintptr(unsafe.Pointer(t.vteWidget)))
 }
 
+var titleDirRegex = regexp.MustCompile(`(?:[^;@]*@)?[^;]*:\s*([/~][^\s]*)`)
+
+func parseURIPath(rawURI string) string {
+	rawURI = strings.TrimSpace(rawURI)
+	if rawURI == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURI)
+	if err == nil && u.Path != "" {
+		return filepath.Clean(u.Path)
+	}
+	if strings.HasPrefix(rawURI, "file://") {
+		idx := strings.Index(rawURI[7:], "/")
+		if idx != -1 {
+			return filepath.Clean(rawURI[7+idx:])
+		}
+	}
+	return ""
+}
+
+func parseTitleDir(title string) string {
+	matches := titleDirRegex.FindStringSubmatch(title)
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
+	}
+	return ""
+}
+
+//export goOnVteDirectoryChanged
+func goOnVteDirectoryChanged(widget *C.GtkWidget, cUri *C.char) {
+	if cUri == nil {
+		return
+	}
+	rawUri := C.GoString(cUri)
+	termRegistryMu.Lock()
+	t := termRegistry[uintptr(unsafe.Pointer(widget))]
+	termRegistryMu.Unlock()
+	if t == nil {
+		return
+	}
+	parsed := parseURIPath(rawUri)
+	if parsed != "" {
+		t.mu.Lock()
+		cb := t.OnDirectoryChanged
+		t.mu.Unlock()
+		if cb != nil {
+			cb(parsed)
+		}
+	}
+}
+
+//export goOnVteTitleChanged
+func goOnVteTitleChanged(widget *C.GtkWidget, cTitle *C.char) {
+	if cTitle == nil {
+		return
+	}
+	title := C.GoString(cTitle)
+	termRegistryMu.Lock()
+	t := termRegistry[uintptr(unsafe.Pointer(widget))]
+	termRegistryMu.Unlock()
+	if t == nil {
+		return
+	}
+	dir := parseTitleDir(title)
+	if dir != "" {
+		t.mu.Lock()
+		cb := t.OnDirectoryChanged
+		t.mu.Unlock()
+		if cb != nil {
+			cb(dir)
+		}
+	}
+}
+
 //export goOnVteKeyPress
 func goOnVteKeyPress(widget *C.GtkWidget, keyval C.guint) C.int {
 	termRegistryMu.Lock()
@@ -246,18 +342,49 @@ func goOnVteKeyPress(widget *C.GtkWidget, keyval C.guint) C.int {
 		return 1
 	}
 
+	// Track typed commands to detect cd <path>
+	t.mu.Lock()
+	if keyval == C.GDK_KEY_Return || keyval == C.GDK_KEY_KP_Enter {
+		line := strings.TrimSpace(t.cmdLine.String())
+		t.cmdLine.Reset()
+		cb := t.OnDirectoryChanged
+		t.mu.Unlock()
+
+		if strings.HasPrefix(line, "cd ") {
+			targetDir := strings.TrimSpace(strings.TrimPrefix(line, "cd "))
+			targetDir = strings.Trim(targetDir, "\"\x27")
+			if targetDir != "" && cb != nil {
+				cb(targetDir)
+			}
+		}
+	} else if keyval == C.GDK_KEY_BackSpace {
+		if t.cmdLine.Len() > 0 {
+			s := t.cmdLine.String()
+			t.cmdLine.Reset()
+			t.cmdLine.WriteString(s[:len(s)-1])
+		}
+		t.mu.Unlock()
+	} else if keyval >= 32 && keyval <= 126 {
+		t.cmdLine.WriteByte(byte(keyval))
+		t.mu.Unlock()
+	} else {
+		t.mu.Unlock()
+	}
+
 	return 0
 }
 
 // Terminal wraps VteTerminal C widget
 type Terminal struct {
 	*gtk.Widget
-	vteWidget      *C.GtkWidget
-	vteTerm        *C.VteTerminal
-	OnResize       func(rows, cols int)
-	OnReconnect    func()
-	isDisconnected bool
-	mu             sync.Mutex
+	vteWidget          *C.GtkWidget
+	vteTerm            *C.VteTerminal
+	OnResize           func(rows, cols int)
+	OnReconnect        func()
+	OnDirectoryChanged func(path string)
+	isDisconnected     bool
+	cmdLine            strings.Builder
+	mu                 sync.Mutex
 }
 
 // SetDisconnected updates disconnected state and reconnect callback

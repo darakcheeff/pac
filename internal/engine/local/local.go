@@ -122,6 +122,7 @@ func StartLocalShellWithOutput(ctx context.Context, host *storage.Host, bridge *
 	}
 
 	envMap["TERM"] = "xterm-256color"
+	envMap["VTE_VERSION"] = "8001"
 
 	var envSlice []string
 	for k, v := range envMap {
@@ -208,4 +209,21 @@ func (s *LocalSession) Close() error {
 		_ = s.cmd.Process.Kill()
 	}
 	return nil
+}
+
+func (s *LocalSession) PID() int {
+	if s.cmd != nil && s.cmd.Process != nil {
+		return s.cmd.Process.Pid
+	}
+	return 0
+}
+
+func (s *LocalSession) CurrentDir() string {
+	pid := s.PID()
+	if pid > 0 {
+		if target, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil && target != "" {
+			return target
+		}
+	}
+	return ""
 }

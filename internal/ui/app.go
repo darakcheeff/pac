@@ -565,6 +565,8 @@ func (app *AppWindow) setupSignals() {
 			app.NotesPanel.LoadSessionNotes(sess)
 			if sess.SFTPClient != nil && sess.Host != nil {
 				app.SFTPPanel.AttachClient(sess.Host.ID, sess.SFTPClient, app.settings.DefaultEditor)
+			} else {
+				app.SFTPPanel.AttachClient("", nil, app.settings.DefaultEditor)
 			}
 			if sess.Host != nil {
 				app.StatusLabel.SetText(i18n.Tf("Сессия: %s (%s) | Протокол: %s", "Session: %s (%s) | Protocol: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
@@ -733,6 +735,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 				return
 			}
 			app.manager.Register(newSess)
+			app.setupSessionDirectorySync(newSess, term)
 
 			// Propagate window resize to PTY and remote SSH
 			term.OnResize = func(rows, cols int) {
@@ -817,6 +820,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			}
 
 			app.manager.Register(sess)
+			app.setupSessionDirectorySync(sess, term)
 
 			// Propagate window resize to PTY and remote SSH
 			term.OnResize = func(rows, cols int) {
@@ -936,6 +940,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 				sess.ID = savedState.ID
 				sess.Notes = savedState.Notes
 				app.manager.Register(sess)
+				app.setupSessionDirectorySync(sess, term)
 
 				term.OnResize = func(rows, cols int) {
 					sess.Resize(rows, cols)
@@ -1301,4 +1306,35 @@ func promptInputDialog(parent gtk.IWindow, title, labelText, defaultValue string
 // promptFolderDialog shows a modal input dialog to specify or rename a folder
 func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, bool) {
 	return promptInputDialog(parent, title, i18n.T("Имя папки:", "Folder name:"), defaultName)
+}
+
+func (app *AppWindow) setupSessionDirectorySync(sess *session.Session, term *vte.Terminal) {
+	if sess == nil {
+		return
+	}
+	if term != nil {
+		term.OnDirectoryChanged = func(path string) {
+			sess.NotifyDirectory(path)
+		}
+	}
+	sess.OnDirectoryChanged = func(path string) {
+		glib.IdleAdd(func() {
+			currTab := app.TabView.GetCurrentTab()
+			if currTab == nil {
+				return
+			}
+			var activeSess *session.Session
+			if currTab.FocusedPane != nil && currTab.FocusedPane.Session != nil {
+				activeSess = currTab.FocusedPane.Session
+			} else {
+				activeSess = currTab.Session
+			}
+			if activeSess == sess {
+				if sess.Host != nil && app.SFTPPanel.currentHostID != sess.Host.ID && sess.SFTPClient != nil {
+					app.SFTPPanel.AttachClient(sess.Host.ID, sess.SFTPClient, app.settings.DefaultEditor)
+				}
+				app.SFTPPanel.LoadDirectory(path)
+			}
+		})
+	}
 }
