@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,11 +12,13 @@ import (
 
 	"github.com/creack/pty"
 	enginePty "github.com/darakcheeff/pac/internal/engine/pty"
+	"github.com/darakcheeff/pac/internal/storage"
 )
 
 type LocalSession struct {
 	cmd       *exec.Cmd
 	ptyBridge *enginePty.PTYBridge
+	ptmx      *os.File
 	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.Mutex
@@ -23,13 +26,41 @@ type LocalSession struct {
 	OnExit    func(err error)
 }
 
+// StartLocalShell begins a default local shell session
 func StartLocalShell(ctx context.Context, bridge *enginePty.PTYBridge) (*LocalSession, error) {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
+	return StartLocalShellWithOutput(ctx, nil, bridge, nil)
+}
+
+// StartLocalShellWithOutput begins a local shell session with specified host configuration and output writer
+func StartLocalShellWithOutput(ctx context.Context, host *storage.Host, bridge *enginePty.PTYBridge, outputWriter io.Writer) (*LocalSession, error) {
+	shell := ""
+	if host != nil && strings.TrimSpace(host.Host) != "" {
+		shell = strings.TrimSpace(host.Host)
+	} else {
+		shell = os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/bash"
+		}
 	}
 
-	cmd := exec.Command(shell, "-l")
+	var cmd *exec.Cmd
+	if strings.Contains(shell, " ") {
+		parts := strings.Fields(shell)
+		cmd = exec.Command(parts[0], parts[1:]...)
+	} else {
+		base := filepath.Base(shell)
+		if base == "bash" || base == "zsh" || base == "sh" {
+			cmd = exec.Command(shell, "-l")
+		} else {
+			cmd = exec.Command(shell)
+		}
+	}
+
+	if host != nil && host.Notes != "" {
+		if info, err := os.Stat(host.Notes); err == nil && info.IsDir() {
+			cmd.Dir = host.Notes
+		}
+	}
 
 	envMap := make(map[string]string)
 	for _, e := range os.Environ() {
@@ -111,11 +142,27 @@ func StartLocalShell(ctx context.Context, bridge *enginePty.PTYBridge) (*LocalSe
 	s := &LocalSession{
 		cmd:       cmd,
 		ptyBridge: bridge,
+		ptmx:      ptmx,
 		ctx:       ctx,
 		cancel:    cancel,
 	}
 
-	go bridge.BridgeIO(ptmx)
+	destWriter := outputWriter
+	if destWriter == nil {
+		destWriter = bridge.Slave
+	}
+
+	// Read from shell ptmx -> write to VTE / Splitter
+	go func() {
+		_, _ = io.Copy(destWriter, ptmx)
+	}()
+
+	// Read from VTE slave -> write to shell ptmx
+	go func() {
+		if bridge.Slave != nil {
+			_, _ = io.Copy(ptmx, bridge.Slave)
+		}
+	}()
 
 	go func() {
 		waitErr := cmd.Wait()
@@ -131,6 +178,20 @@ func StartLocalShell(ctx context.Context, bridge *enginePty.PTYBridge) (*LocalSe
 	return s, nil
 }
 
+// Resize propagates window size change to the local shell PTY
+func (s *LocalSession) Resize(rows, cols int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.ptmx == nil || rows <= 0 || cols <= 0 {
+		return
+	}
+	_ = pty.Setsize(s.ptmx, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
+}
+
+// Close terminates the local shell session and cleans up resources
 func (s *LocalSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,6 +201,9 @@ func (s *LocalSession) Close() error {
 	s.closed = true
 	s.cancel()
 
+	if s.ptmx != nil {
+		_ = s.ptmx.Close()
+	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}

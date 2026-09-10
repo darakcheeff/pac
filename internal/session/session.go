@@ -190,7 +190,7 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		}
 
 	case storage.ProtoLocal:
-		lSess, err := local.StartLocalShell(ctx, bridge)
+		lSess, err := local.StartLocalShellWithOutput(ctx, host, bridge, sess.Splitter)
 		if err != nil {
 			bridge.Close()
 			return nil, err
@@ -228,6 +228,9 @@ func (s *Session) Resize(rows, cols int) {
 		go func(r, c int) {
 			_ = s.SSHSession.WindowChange(r, c)
 		}(rows, cols)
+	}
+	if s.LocalSession != nil {
+		s.LocalSession.Resize(rows, cols)
 	}
 }
 

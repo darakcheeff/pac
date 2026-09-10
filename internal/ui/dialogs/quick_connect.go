@@ -159,6 +159,11 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 			name = i18n.T("Локальный терминал", "Local Terminal")
 		}
 
+		autoSFTP := true
+		if proto == storage.ProtoLocal || proto == storage.ProtoSerial {
+			autoSFTP = false
+		}
+
 		host := &storage.Host{
 			ID:             fmt.Sprintf("quick-%d", time.Now().Unix()),
 			Name:           name,
@@ -173,7 +178,7 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 			SerialDataBits: 8,
 			SerialStopBits: 1,
 			SerialParity:   "none",
-			AutoSFTP:       true,
+			AutoSFTP:       autoSFTP,
 			TerminalType:   "xterm-256color",
 			CreatedAt:      time.Now(),
 		}

@@ -123,18 +123,23 @@ func (p *PTYBridge) GetSize() (Winsize, error) {
 	}, nil
 }
 
-// BridgeIO bi-directionally copies between Go ReadWriter (e.g. SSH channel/socket) and PTY Master
+// BridgeIO bi-directionally copies between Go ReadWriter (e.g. SSH channel/socket) and PTY Master or Slave
 func (p *PTYBridge) BridgeIO(stream io.ReadWriter) (<-chan error, <-chan error) {
 	errIn := make(chan error, 1)
 	errOut := make(chan error, 1)
 
-	if p.Master != nil {
+	endpoint := p.Master
+	if endpoint == nil {
+		endpoint = p.Slave
+	}
+
+	if endpoint != nil {
 		go func() {
-			_, err := io.Copy(p.Master, stream)
+			_, err := io.Copy(endpoint, stream)
 			errIn <- err
 		}()
 		go func() {
-			_, err := io.Copy(stream, p.Master)
+			_, err := io.Copy(stream, endpoint)
 			errOut <- err
 		}()
 	}
