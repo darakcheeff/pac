@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -252,19 +251,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		}
 	}()
 
-	// Background initialization: Migrate legacy config (if any) and restore saved sessions
+	// Background initialization: Restore saved sessions
 	go func() {
-		n, err := migration.MigrateOldConfig(store, "")
 		glib.IdleAdd(func() {
-			if err != nil {
-				log.Printf("[MIGRATE] Error checking legacy config: %v", err)
-			}
-			if n > 0 {
-				app.HostTree.Reload()
-				app.StatusLabel.SetText(i18n.Tf("Импортировано %d хостов из старого Ásbrú", "Imported %d hosts from old Ásbrú", n))
-			}
-
-			// Restore saved sessions
 			if app.settings.AutoRestoreSessions {
 				app.RestoreSavedSessions()
 			} else {
@@ -388,6 +377,17 @@ func (app *AppWindow) setupMenuAndToolbar() {
 		app.ToggleNotesPanel()
 	})
 	app.ToolBar.Insert(btnNotes, -1)
+
+	// 8. Import from Ásbrú / PAC
+	btnImport, _ := gtk.ToolButtonNew(nil, i18n.T("Импорт из Ásbrú / PAC", "Import from Ásbrú / PAC"))
+	btnImport.SetIconName("document-open-symbolic")
+	btnImport.SetTooltipText(i18n.T("Импортировать подключения из Ásbrú / PAC (asbru.conf, pac.yml)", "Import connections from Ásbrú / PAC (asbru.conf, pac.yml)"))
+	btnImport.Connect("clicked", func() {
+		if app.HostTree.OnImportOld != nil {
+			app.HostTree.OnImportOld()
+		}
+	})
+	app.ToolBar.Insert(btnImport, -1)
 }
 
 
@@ -493,13 +493,57 @@ func (app *AppWindow) setupSignals() {
 			return
 		}
 
-		n, err := migration.MigrateOldConfig(app.store, configPath)
+		hosts, _, err := migration.ParseLegacyConfigFile(configPath)
 		if err != nil {
-			app.StatusLabel.SetText(i18n.T("Ошибка импорта: ", "Import error: ") + err.Error())
+			app.StatusLabel.SetText(i18n.T("Ошибка чтения конфигурации: ", "Configuration read error: ") + err.Error())
 			return
 		}
-		app.HostTree.Reload()
-		app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d сессий из %s", "Successfully imported %d sessions from %s", n, filepath.Base(configPath)))
+
+		if len(hosts) == 0 {
+			app.StatusLabel.SetText(i18n.T("В конфигурационном файле не найдено подключений", "No connections found in configuration file"))
+			return
+		}
+
+		dialogs.ShowImportHostsDialog(app.Window, hosts, func(selected []*storage.Host) {
+			if len(selected) == 0 {
+				return
+			}
+
+			// Ensure "asbru" group exists
+			asbruGroupID := "group-asbru"
+			allGroups, _ := app.store.GetAllGroups()
+			asbruExists := false
+			for _, g := range allGroups {
+				if g.ID == asbruGroupID || strings.EqualFold(g.Name, "asbru") {
+					asbruGroupID = g.ID
+					asbruExists = true
+					break
+				}
+			}
+
+			if !asbruExists {
+				newGroup := &storage.Group{
+					ID:        asbruGroupID,
+					ParentID:  "root",
+					Name:      "asbru",
+					Icon:      "folder-remote",
+					CreatedAt: time.Now(),
+					UpdatedAt: time.Now(),
+				}
+				_ = app.store.SaveGroup(newGroup)
+			}
+
+			importedCount := 0
+			for _, h := range selected {
+				h.GroupID = asbruGroupID
+				if err := app.store.SaveHost(h); err == nil {
+					importedCount++
+				}
+			}
+
+			app.HostTree.Reload()
+			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d хостов в папку asbru", "Successfully imported %d hosts into asbru folder", importedCount))
+		})
 	}
 
 	app.TabView.OnTabChanged = func(sess *session.Session) {
@@ -589,6 +633,10 @@ func (app *AppWindow) setupSignals() {
 		dialogs.ShowQuickConnectDialog(app.Window, func(h *storage.Host) {
 			app.ConnectToHost(h)
 		})
+	}
+
+	app.TabView.OnNewLocalTerminal = func() {
+		app.OpenLocalTerminal()
 	}
 
 	app.TabView.OnClusterAdmin = func() {
@@ -692,6 +740,18 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			app.attachSessionExitHandler(newSess, term, targetHost, tab.Session.Title+i18n.T(" [сплит]", " [split]"))
 		})
 	}()
+}
+
+// OpenLocalTerminal opens a new tab with an interactive local terminal session
+func (app *AppWindow) OpenLocalTerminal() {
+	localHost := &storage.Host{
+		ID:           fmt.Sprintf("local-%d", time.Now().UnixNano()),
+		Name:         i18n.T("Локальный терминал", "Local Terminal"),
+		Protocol:     storage.ProtoLocal,
+		Host:         "/bin/bash",
+		TerminalType: "xterm-256color",
+	}
+	app.ConnectToHost(localHost)
 }
 
 // ConnectToHost opens a new session and attaches it to a new tab

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/darakcheeff/pac/internal/i18n"
@@ -32,6 +33,9 @@ type HostTree struct {
 	OnAddGroup    func(parentGroupID string)
 	OnRenameGroup func(groupID string)
 	OnImportOld   func()
+
+	collapsedGroups map[string]bool
+	isReloading     bool
 }
 
 func NewHostTree(store *storage.Store) (*HostTree, error) {
@@ -75,11 +79,48 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	box.PackStart(scrolled, true, true, 0)
 
 	ht := &HostTree{
-		Box:       box,
-		TreeView:  treeView,
-		TreeStore: treeStore,
-		store:     store,
+		Box:             box,
+		TreeView:        treeView,
+		TreeStore:       treeStore,
+		store:           store,
+		collapsedGroups: make(map[string]bool),
 	}
+
+	if val, err := store.GetSetting("tree_collapsed_groups"); err == nil && val != "" {
+		_ = json.Unmarshal([]byte(val), &ht.collapsedGroups)
+	}
+
+	treeView.Connect("row-collapsed", func(tv *gtk.TreeView, iter *gtk.TreeIter, path *gtk.TreePath) {
+		if ht.isReloading {
+			return
+		}
+		valType, _ := ht.TreeStore.GetValue(iter, ColType)
+		typeStr, _ := valType.GetString()
+		if typeStr == "group" {
+			valID, _ := ht.TreeStore.GetValue(iter, ColID)
+			groupID, _ := valID.GetString()
+			if groupID != "" {
+				ht.collapsedGroups[groupID] = true
+				ht.saveCollapsedState()
+			}
+		}
+	})
+
+	treeView.Connect("row-expanded", func(tv *gtk.TreeView, iter *gtk.TreeIter, path *gtk.TreePath) {
+		if ht.isReloading {
+			return
+		}
+		valType, _ := ht.TreeStore.GetValue(iter, ColType)
+		typeStr, _ := valType.GetString()
+		if typeStr == "group" {
+			valID, _ := ht.TreeStore.GetValue(iter, ColID)
+			groupID, _ := valID.GetString()
+			if groupID != "" {
+				delete(ht.collapsedGroups, groupID)
+				ht.saveCollapsedState()
+			}
+		}
+	})
 
 	// Double click to connect
 	treeView.Connect("row-activated", func(tv *gtk.TreeView, path *gtk.TreePath, column *gtk.TreeViewColumn) {
@@ -123,8 +164,19 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	return ht, nil
 }
 
+func (ht *HostTree) saveCollapsedState() {
+	if data, err := json.Marshal(ht.collapsedGroups); err == nil {
+		_ = ht.store.SaveSetting("tree_collapsed_groups", string(data))
+	}
+}
+
 // Reload populates the tree from database
 func (ht *HostTree) Reload() {
+	ht.isReloading = true
+	defer func() {
+		ht.isReloading = false
+	}()
+
 	ht.TreeStore.Clear()
 
 	groups, err := ht.store.GetAllGroups()
@@ -191,13 +243,30 @@ func (ht *HostTree) Reload() {
 	}
 
 	ht.TreeView.ExpandAll()
+
+	// Reapply collapsed state
+	for gid, collapsed := range ht.collapsedGroups {
+		if collapsed {
+			if iter, ok := groupMap[gid]; ok && iter != nil {
+				if path, err := ht.TreeStore.GetPath(iter); err == nil && path != nil {
+					ht.TreeView.CollapseRow(path)
+				}
+			}
+		}
+	}
 }
 
 func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
-	valType, _ := ht.TreeStore.GetValue(iter, ColType)
-	typeStr, _ := valType.GetString()
-	valID, _ := ht.TreeStore.GetValue(iter, ColID)
-	idStr, _ := valID.GetString()
+	typeStr := "group"
+	idStr := "root"
+	if iter != nil {
+		if valType, err := ht.TreeStore.GetValue(iter, ColType); err == nil && valType != nil {
+			typeStr, _ = valType.GetString()
+		}
+		if valID, err := ht.TreeStore.GetValue(iter, ColID); err == nil && valID != nil {
+			idStr, _ = valID.GetString()
+		}
+	}
 
 	menu, _ := gtk.MenuNew()
 

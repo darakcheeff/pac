@@ -76,26 +76,47 @@ func FindLegacyConfigPath() string {
 	return ""
 }
 
-// MigrateOldConfig scans standard paths for asbru.conf / pac.yml and imports into store
-func MigrateOldConfig(store *storage.Store, configPath string) (int, error) {
+// ParseLegacyData parses raw YAML or Perl DataDumper content into hosts and groups
+func ParseLegacyData(data []byte) ([]*storage.Host, []*storage.Group, error) {
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("$VAR1")) {
+		return parsePerlDataDumper(string(data))
+	}
+	return parseYAML(data)
+}
+
+// ParseLegacyConfigFile reads and parses a legacy config file into hosts and groups
+func ParseLegacyConfigFile(configPath string) ([]*storage.Host, []*storage.Group, error) {
 	if configPath == "" {
 		configPath = FindLegacyConfigPath()
 	}
-
 	if configPath == "" {
-		return 0, nil
+		return nil, nil, fmt.Errorf("legacy configuration file not found")
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	return ParseLegacyData(data)
+}
+
+// MigrateOldConfig scans standard paths for asbru.conf / pac.yml and imports into store
+func MigrateOldConfig(store *storage.Store, configPath string) (int, error) {
+	hosts, groups, err := ParseLegacyConfigFile(configPath)
+	if err != nil {
 		return 0, err
 	}
-
-	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("$VAR1")) {
-		return importPerlDataDumper(store, string(data))
+	for _, g := range groups {
+		_ = store.SaveGroup(g)
 	}
-
-	return importYAML(store, data)
+	count := len(groups)
+	for _, h := range hosts {
+		if err := store.SaveHost(h); err == nil {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func getString(m map[string]interface{}, keys ...string) string {
@@ -166,16 +187,35 @@ func resolveAuth(authType, keyPath, pass, passphrase string) (storage.AuthMethod
 }
 
 func importYAML(store *storage.Store, data []byte) (int, error) {
+	hosts, groups, err := parseYAML(data)
+	if err != nil {
+		return 0, err
+	}
+	for _, g := range groups {
+		_ = store.SaveGroup(g)
+	}
+	count := len(groups)
+	for _, h := range hosts {
+		if err := store.SaveHost(h); err == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func parseYAML(data []byte) ([]*storage.Host, []*storage.Group, error) {
 	var root map[string]interface{}
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return 0, fmt.Errorf("failed to parse legacy YAML: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse legacy YAML: %w", err)
 	}
 
-	count := 0
 	environments, ok := root["environments"].(map[string]interface{})
 	if !ok {
 		environments = root
 	}
+
+	var hosts []*storage.Host
+	var groups []*storage.Group
 
 	for id, val := range environments {
 		nodeMap, ok := val.(map[string]interface{})
@@ -206,8 +246,7 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
 			}
-			_ = store.SaveGroup(group)
-			count++
+			groups = append(groups, group)
 			continue
 		}
 
@@ -253,26 +292,42 @@ func importYAML(store *storage.Store, data []byte) (int, error) {
 			CreatedAt:       time.Now(),
 			UpdatedAt:       time.Now(),
 		}
-
-		if err := store.SaveHost(host); err == nil {
-			count++
-		}
+		hosts = append(hosts, host)
 	}
 
-	return count, nil
+	return hosts, groups, nil
 }
 
 func importPerlDataDumper(store *storage.Store, content string) (int, error) {
-	count := 0
+	hosts, groups, err := parsePerlDataDumper(content)
+	if err != nil {
+		return 0, err
+	}
+	for _, g := range groups {
+		_ = store.SaveGroup(g)
+	}
+	count := len(groups)
+	for _, h := range hosts {
+		if err := store.SaveHost(h); err == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func parsePerlDataDumper(content string) ([]*storage.Host, []*storage.Group, error) {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 
 	var currentID string
 	var currentData = make(map[string]string)
 
-	nodeRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*\{`)
-	kvSingleRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*'((?:\\'|[^'])*)'`)
-	kvDoubleRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*"((?:\\"|[^"])*)"`)
-	kvNumRegex := regexp.MustCompile(`'([^']+)'\s*=>\s*([0-9]+)`)
+	nodeRegex := regexp.MustCompile(`\x27([^\x27]+)\x27\s*=>\s*\{`)
+	kvSingleRegex := regexp.MustCompile(`\x27([^\x27]+)\x27\s*=>\s*\x27((?:\\\x27|[^\x27])*)\x27`)
+	kvDoubleRegex := regexp.MustCompile(`\x27([^\x27]+)\x27\s*=>\s*"((?:\\"|[^"])*)"`)
+	kvNumRegex := regexp.MustCompile(`\x27([^\x27]+)\x27\s*=>\s*([0-9]+)`)
+
+	var hosts []*storage.Host
+	var groups []*storage.Group
 
 	flushNode := func() {
 		if currentID == "" || len(currentData) == 0 {
@@ -288,7 +343,7 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 		}
 
 		if currentData["is_folder"] == "1" || currentData["is_group"] == "1" {
-			_ = store.SaveGroup(&storage.Group{
+			groups = append(groups, &storage.Group{
 				ID:        currentID,
 				ParentID:  parent,
 				Name:      title,
@@ -296,56 +351,53 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
 			})
-			count++
 		} else {
 			port, _ := strconv.Atoi(currentData["port"])
-			if port == 0 {
-				port = 22
-			}
-
-			method := getMapString(currentData, "method", "protocol")
-			proto := resolveProtocol(method)
-
-			rawPass := getMapString(currentData, "pass", "password", "pwd")
-			pass := DecodePACPassword(rawPass)
-
-			rawPassphrase := getMapString(currentData, "passphrase", "key_passphrase", "passphrase user")
-			passphrase := DecodePACPassword(rawPassphrase)
-
-			rawKeyPath := getMapString(currentData, "public key", "public_key", "auth_key", "key", "key_path", "identity_file", "identity")
-			rawAuthType := getMapString(currentData, "auth type", "auth_type", "auth", "authentication")
-
-			authMethod, keyPath, finalPass, finalKeyPass := resolveAuth(rawAuthType, rawKeyPath, pass, passphrase)
-
-			host := &storage.Host{
-				ID:              currentID,
-				GroupID:         parent,
-				Name:            title,
-				Description:     getMapString(currentData, "description", "desc"),
-				Protocol:        proto,
-				Host:            getMapString(currentData, "ip", "host", "hostname"),
-				Port:            port,
-				Username:        getMapString(currentData, "user", "username"),
-				AuthMethod:      authMethod,
-				Password:        finalPass,
-				KeyPath:         keyPath,
-				KeyPass:         finalKeyPass,
-				AutoSFTP:        true,
-				TerminalType:    "xterm-256color",
-				ScrollbackLines: 10000,
-				LogCleanANSI:    true,
-				RestoreHistory:  true,
-				Notes:           getMapString(currentData, "notes", "comments"),
-				CreatedAt:       time.Now(),
-				UpdatedAt:       time.Now(),
-			}
-			if err := store.SaveHost(host); err == nil {
-				count++
-			}
+		if port == 0 {
+			port = 22
 		}
-		currentID = ""
-		currentData = make(map[string]string)
+
+		method := getMapString(currentData, "method", "protocol")
+		proto := resolveProtocol(method)
+
+		rawPass := getMapString(currentData, "pass", "password", "pwd")
+		pass := DecodePACPassword(rawPass)
+
+		rawPassphrase := getMapString(currentData, "passphrase", "key_passphrase", "passphrase user")
+		passphrase := DecodePACPassword(rawPassphrase)
+
+		rawKeyPath := getMapString(currentData, "public key", "public_key", "auth_key", "key", "key_path", "identity_file", "identity")
+		rawAuthType := getMapString(currentData, "auth type", "auth_type", "auth", "authentication")
+
+		authMethod, keyPath, finalPass, finalKeyPass := resolveAuth(rawAuthType, rawKeyPath, pass, passphrase)
+
+		host := &storage.Host{
+			ID:              currentID,
+			GroupID:         parent,
+			Name:            title,
+			Description:     getMapString(currentData, "description", "desc"),
+			Protocol:        proto,
+			Host:            getMapString(currentData, "ip", "host", "hostname"),
+			Port:            port,
+			Username:        getMapString(currentData, "user", "username"),
+			AuthMethod:      authMethod,
+			Password:        finalPass,
+			KeyPath:         keyPath,
+			KeyPass:         finalKeyPass,
+			AutoSFTP:        true,
+			TerminalType:    "xterm-256color",
+			ScrollbackLines: 10000,
+			LogCleanANSI:    true,
+			RestoreHistory:  true,
+			Notes:           getMapString(currentData, "notes", "comments"),
+			CreatedAt:       time.Now(),
+			UpdatedAt:       time.Now(),
+		}
+		hosts = append(hosts, host)
 	}
+	currentID = ""
+	currentData = make(map[string]string)
+}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -366,7 +418,7 @@ func importPerlDataDumper(store *storage.Store, content string) (int, error) {
 	}
 	flushNode()
 
-	return count, nil
+	return hosts, groups, nil
 }
 
 func getInt(val interface{}, def int) int {

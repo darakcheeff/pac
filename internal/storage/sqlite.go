@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -552,4 +553,19 @@ func (s *Store) SaveSetting(key, value string) error {
 
 	_, err := s.db.Exec(query, key, value)
 	return err
+}
+
+func (s *Store) GetSetting(key string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var val string
+	err := s.db.QueryRow("SELECT value FROM app_settings WHERE key = ?", key).Scan(&val)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+		}
+	return val, nil
 }

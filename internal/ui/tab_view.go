@@ -101,6 +101,7 @@ type TabView struct {
 	OnEditHostRequested    func(host *storage.Host)
 	OnSaveLogRequested     func(sess *session.Session)
 	OnNewConnection        func()
+	OnNewLocalTerminal     func()
 	OnClusterAdmin         func()
 }
 
@@ -112,11 +113,28 @@ func NewTabView() (*TabView, error) {
 	}
 	nb.SetScrollable(true)
 	nb.SetShowBorder(true)
+	nb.SetShowTabs(true)
 	nb.PopupEnable()
 
 	tv := &TabView{
 		Notebook: nb,
 		items:    make([]*TabItem, 0),
+	}
+
+	btnNewTab, btnErr := gtk.ButtonNewFromIconName("list-add-symbolic", gtk.ICON_SIZE_BUTTON)
+	if btnErr == nil {
+		btnNewTab.SetRelief(gtk.RELIEF_NONE)
+		btnNewTab.SetTooltipText(i18n.T("Создать новую вкладку (Локальный терминал)", "Create new tab (Local Terminal)"))
+		btnNewTab.SetMarginEnd(2)
+		btnNewTab.SetMarginTop(1)
+		btnNewTab.SetMarginBottom(1)
+		btnNewTab.Connect("clicked", func() {
+			if tv.OnNewLocalTerminal != nil {
+				tv.OnNewLocalTerminal()
+			}
+		})
+		btnNewTab.Show()
+		nb.SetActionWidget(btnNewTab, gtk.PACK_END)
 	}
 
 	nb.AddEvents(int(gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
