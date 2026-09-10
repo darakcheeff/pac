@@ -30,18 +30,22 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	// Port entry declared early
 	entryPort, _ := gtk.EntryNew()
 	entryPort.SetText("22")
+	entryPort.SetActivatesDefault(true)
 
 	// Host / Device entry
 	entryHost, _ := gtk.EntryNew()
 	entryHost.SetPlaceholderText(i18n.T("192.168.1.1 или server.com", "192.168.1.1 or server.com"))
+	entryHost.SetActivatesDefault(true)
 
 	// User entry
 	entryUser, _ := gtk.EntryNew()
 	entryUser.SetPlaceholderText(i18n.T("root / admin", "root / admin"))
+	entryUser.SetActivatesDefault(true)
 
 	// Password entry
 	entryPass, _ := gtk.EntryNew()
 	entryPass.SetVisibility(false)
+	entryPass.SetActivatesDefault(true)
 
 	// Protocol
 	lblProto, _ := gtk.LabelNew(i18n.T("Протокол:", "Protocol:"))
