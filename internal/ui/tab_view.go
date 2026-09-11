@@ -190,7 +190,9 @@ func (tv *TabView) UpdateTabTitle(item *TabItem) {
 	item.Label.SetMarkup(fullMarkup)
 
 	plainTitle := strings.Join(plainParts, " + ")
-	tv.Notebook.SetMenuLabelText(item.ContentBox, plainTitle)
+	if tv.Notebook != nil && item.ContentBox != nil && tv.Notebook.PageNum(item.ContentBox) >= 0 {
+		tv.Notebook.SetMenuLabelText(item.ContentBox, plainTitle)
+	}
 }
 
 // UpdateTabTitleForSession updates title of the tab holding the session

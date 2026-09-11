@@ -113,122 +113,151 @@ button {
 `
 
 const darkCSS = baseCompactCSS + `
-window, dialog {
-	background-color: #2b2b2b;
-	color: #eeeeee;
+window, dialog, .background {
+	background-color: #242424;
+	color: #dddddd;
 }
-toolbar {
-	background-color: #323232;
-	color: #eeeeee;
-	border-bottom: 1px solid #202020;
+headerbar, toolbar {
+	background-color: #2d2d2d;
+	color: #dddddd;
+	border-bottom: 1px solid #1a1a1a;
 }
 toolbar button {
-	color: #eeeeee;
+	color: #dddddd;
+	background-color: transparent;
+	border: 1px solid transparent;
 }
 toolbar button:hover {
-	background-color: #444444;
+	background-color: #3d3d3d;
+	border: 1px solid #505050;
 }
 menubar {
 	background-color: #2d2d2d;
-	color: #eeeeee;
-	border-bottom: 1px solid #202020;
+	color: #dddddd;
+	border-bottom: 1px solid #1a1a1a;
 }
 menubar > menuitem {
-	color: #eeeeee;
+	color: #dddddd;
 }
 menubar > menuitem:hover {
-	background-color: #404040;
+	background-color: #3d3d3d;
 }
 menu, .menu {
 	background-color: #2d2d2d;
-	color: #eeeeee;
-	border: 1px solid #404040;
+	color: #dddddd;
+	border: 1px solid #3d3d3d;
 }
 menuitem {
-	color: #eeeeee;
+	color: #dddddd;
 }
 menuitem:hover {
 	background-color: #3584e4;
 	color: #ffffff;
 }
-treeview {
+scrolledwindow, viewport {
 	background-color: #242424;
-	color: #eeeeee;
 }
-treeview:selected {
+treeview, treeview.view {
+	background-color: #242424;
+	color: #dddddd;
+	border: none;
+}
+treeview:selected, treeview.view:selected {
 	background-color: #1a5fb4;
 	color: #ffffff;
 }
-treeview header button {
-	background-color: #303030;
-	color: #cccccc;
-	border-bottom: 1px solid #202020;
+treeview header button, treeview header button:hover {
+	background-color: #2d2d2d;
+	color: #aaaaaa;
+	border-bottom: 1px solid #1a1a1a;
+	border-right: 1px solid #1a1a1a;
 }
-notebook header {
+notebook {
+	background-color: #242424;
+}
+notebook > header, notebook header {
 	background-color: #282828;
-	border-bottom: 1px solid #1e1e1e;
+	border-bottom: 1px solid #1a1a1a;
 }
-notebook tab {
-	background-color: #2e2e2e;
-	color: #cccccc;
-	border: 1px solid #202020;
+notebook > header > tabs > tab, notebook tab {
+	background-color: #2b2b2b;
+	color: #aaaaaa;
+	border: 1px solid #1e1e1e;
 	border-bottom: none;
 }
-notebook tab:checked, notebook tab:active {
-	background-color: #383838;
+notebook > header > tabs > tab:checked, notebook tab:checked, notebook tab:active {
+	background-color: #333333;
 	color: #ffffff;
+	border: 1px solid #444444;
+	border-bottom: none;
 }
 notebook tab button {
 	color: #aaaaaa;
+	background-color: transparent;
+	border: none;
 }
 notebook tab button:hover {
 	color: #ffffff;
-	background-color: rgba(255, 255, 255, 0.18);
+	background-color: rgba(255, 255, 255, 0.2);
 }
-statusbar {
-	background-color: #282828;
-	color: #aaaaaa;
-	border-top: 1px solid #202020;
+textview, textview text {
+	background-color: #242424;
+	color: #eeeeee;
 }
 entry {
-	background-color: #1e1e1e;
+	background-color: #1a1a1a;
 	color: #ffffff;
-	border: 1px solid #454545;
+	border: 1px solid #3d3d3d;
 }
 entry:focus {
 	border-color: #3584e4;
 }
+statusbar {
+	background-color: #282828;
+	color: #aaaaaa;
+	border-top: 1px solid #1a1a1a;
+}
 paned > separator {
-	background-color: #1e1e1e;
+	background-color: #1a1a1a;
 }
 button {
-	background-color: #383838;
-	color: #eeeeee;
-	border: 1px solid #484848;
+	background-color: #333333;
+	color: #dddddd;
+	border: 1px solid #444444;
 }
 button:hover {
-	background-color: #484848;
+	background-color: #404040;
+	border-color: #555555;
 }
 button:active {
-	background-color: #252525;
+	background-color: #202020;
+}
+scrollbar slider {
+	background-color: #404040;
+}
+scrollbar slider:hover {
+	background-color: #555555;
 }
 `
 
 const lightCSS = baseCompactCSS + `
-window, dialog {
+window, dialog, .background {
 	background-color: #f6f6f6;
 	color: #2e3436;
 }
-toolbar {
+headerbar, toolbar {
 	background-color: #ebebeb;
 	color: #2e3436;
 	border-bottom: 1px solid #d0d0d0;
 }
 toolbar button {
 	color: #2e3436;
+	background-color: transparent;
+	border: 1px solid transparent;
 }
 toolbar button:hover {
 	background-color: #dedede;
+	border: 1px solid #cccccc;
 }
 menubar {
 	background-color: #f0f0f0;
@@ -253,44 +282,55 @@ menuitem:hover {
 	background-color: #3584e4;
 	color: #ffffff;
 }
-treeview {
+scrolledwindow, viewport {
+	background-color: #ffffff;
+}
+treeview, treeview.view {
 	background-color: #ffffff;
 	color: #2e3436;
+	border: none;
 }
-treeview:selected {
+treeview:selected, treeview.view:selected {
 	background-color: #3584e4;
 	color: #ffffff;
 }
-treeview header button {
+treeview header button, treeview header button:hover {
 	background-color: #ececec;
 	color: #555555;
 	border-bottom: 1px solid #d0d0d0;
+	border-right: 1px solid #d0d0d0;
 }
-notebook header {
+notebook {
+	background-color: #f6f6f6;
+}
+notebook > header, notebook header {
 	background-color: #e8e8e8;
 	border-bottom: 1px solid #cccccc;
 }
-notebook tab {
+notebook > header > tabs > tab, notebook tab {
 	background-color: #dedede;
 	color: #555555;
 	border: 1px solid #cccccc;
 	border-bottom: none;
 }
-notebook tab:checked, notebook tab:active {
+notebook > header > tabs > tab:checked, notebook tab:checked, notebook tab:active {
 	background-color: #ffffff;
 	color: #2e3436;
+	border: 1px solid #cccccc;
+	border-bottom: none;
 }
 notebook tab button {
 	color: #666666;
+	background-color: transparent;
+	border: none;
 }
 notebook tab button:hover {
 	color: #000000;
 	background-color: rgba(0, 0, 0, 0.1);
 }
-statusbar {
-	background-color: #ececec;
-	color: #555555;
-	border-top: 1px solid #cccccc;
+textview, textview text {
+	background-color: #ffffff;
+	color: #2e3436;
 }
 entry {
 	background-color: #ffffff;
@@ -299,6 +339,11 @@ entry {
 }
 entry:focus {
 	border-color: #3584e4;
+}
+statusbar {
+	background-color: #ececec;
+	color: #555555;
+	border-top: 1px solid #cccccc;
 }
 paned > separator {
 	background-color: #cccccc;
@@ -310,9 +355,16 @@ button {
 }
 button:hover {
 	background-color: #e4e4e4;
+	border-color: #bbbbbb;
 }
 button:active {
 	background-color: #d8d8d8;
+}
+scrollbar slider {
+	background-color: #cccccc;
+}
+scrollbar slider:hover {
+	background-color: #aaaaaa;
 }
 `
 
@@ -327,6 +379,11 @@ func (app *AppWindow) applyTheme(theme string) {
 	settings, err := gtk.SettingsGetDefault()
 	if err == nil && settings != nil {
 		_ = settings.SetProperty("gtk-application-prefer-dark-theme", isDark)
+		if isDark {
+			_ = settings.SetProperty("gtk-theme-name", "Adwaita-dark")
+		} else {
+			_ = settings.SetProperty("gtk-theme-name", "Adwaita")
+		}
 	}
 
 	cssData := darkCSS
@@ -340,7 +397,7 @@ func (app *AppWindow) applyTheme(theme string) {
 			app.themeProvider = provider
 			screen, err := gdk.ScreenGetDefault()
 			if err == nil && screen != nil {
-				gtk.AddProviderForScreen(screen, app.themeProvider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+				gtk.AddProviderForScreen(screen, app.themeProvider, gtk.STYLE_PROVIDER_PRIORITY_USER)
 			}
 		}
 	}
@@ -366,6 +423,7 @@ func (app *AppWindow) updateThemeButton() {
 		app.btnTheme.SetTooltipText(i18n.T("Переключить на тёмную тему (Луна)", "Switch to Dark theme (Moon)"))
 		app.btnTheme.SetLabel(i18n.T("Тёмная тема", "Dark Theme"))
 	}
+	app.btnTheme.ShowAll()
 }
 
 // ToggleTheme switches between dark and light themes and persists user preference
@@ -374,6 +432,7 @@ func (app *AppWindow) ToggleTheme() {
 	if app.currentTheme == "light" {
 		newTheme = "dark"
 	}
+	log.Printf("[APP] ToggleTheme: switching to %s", newTheme)
 	app.applyTheme(newTheme)
 	if app.settings != nil {
 		app.settings.Theme = newTheme
