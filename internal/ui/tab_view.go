@@ -82,7 +82,7 @@ const (
 	ColorTabAlive    = "#2ec27e" // Green: alive, connected, no unread changes
 	ColorTabActivity = "#3584e4" // Blue: changes occurred while not in focus
 	ColorTabDead     = "#e01b24" // Red: connection closed / disconnected
-	ColorTabSep      = "#888888" // Gray: separator '+'
+	ColorTabSep      = "#ffffff" // Gray: separator '+'
 )
 
 // TabItem represents one open session tab inside the notebook (can hold multiple split panes)
@@ -185,7 +185,7 @@ func (tv *TabView) UpdateTabTitle(item *TabItem) {
 		parts = append(parts, fmt.Sprintf(`<span foreground="%s">%s</span>`, color, escaped))
 	}
 
-	sep := fmt.Sprintf(` <span foreground="%s">+</span> `, ColorTabSep)
+	sep := fmt.Sprintf(` <span foreground="%s" weight="bold">+</span> `, ColorTabSep)
 	fullMarkup := strings.Join(parts, sep)
 	item.Label.SetMarkup(fullMarkup)
 

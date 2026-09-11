@@ -98,8 +98,8 @@ menubar > menuitem {
 	font-size: 11px;
 }
 paned > separator {
-	min-width: 3px;
-	min-height: 3px;
+	min-width: 4px;
+	min-height: 4px;
 }
 entry {
 	min-height: 24px;
@@ -218,7 +218,12 @@ statusbar {
 	border-top: 1px solid #1a1a1a;
 }
 paned > separator {
-	background-color: #1a1a1a;
+	background-color: #555555;
+	border: 1px solid #383838;
+}
+paned > separator:hover {
+	background-color: #3584e4;
+	border-color: #1a5fb4;
 }
 button {
 	background-color: #333333;
@@ -346,7 +351,12 @@ statusbar {
 	border-top: 1px solid #cccccc;
 }
 paned > separator {
-	background-color: #cccccc;
+	background-color: #b0b0b0;
+	border: 1px solid #999999;
+}
+paned > separator:hover {
+	background-color: #3584e4;
+	border-color: #1a5fb4;
 }
 button {
 	background-color: #f0f0f0;
