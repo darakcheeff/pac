@@ -180,16 +180,14 @@ notebook > header, notebook header {
 	border-bottom: 1px solid #1a1a1a;
 }
 notebook > header > tabs > tab, notebook tab {
-	background-color: #2b2b2b;
+	background-color: transparent;
 	color: #aaaaaa;
-	border: 1px solid #1e1e1e;
-	border-bottom: none;
+	border: none;
 }
 notebook > header > tabs > tab:checked, notebook tab:checked, notebook tab:active {
-	background-color: #333333;
+	background-color: #383838;
 	color: #ffffff;
-	border: 1px solid #444444;
-	border-bottom: none;
+	border: none;
 }
 notebook tab button {
 	color: #aaaaaa;
@@ -323,16 +321,14 @@ notebook > header, notebook header {
 	border-bottom: 1px solid #cccccc;
 }
 notebook > header > tabs > tab, notebook tab {
-	background-color: #dedede;
+	background-color: transparent;
 	color: #555555;
-	border: 1px solid #cccccc;
-	border-bottom: none;
+	border: none;
 }
 notebook > header > tabs > tab:checked, notebook tab:checked, notebook tab:active {
 	background-color: #ffffff;
 	color: #2e3436;
-	border: 1px solid #cccccc;
-	border-bottom: none;
+	border: none;
 }
 notebook tab button {
 	color: #666666;
@@ -395,7 +391,7 @@ tooltip, tooltip.background {
 }
 tooltip label, tooltip * {
 	color: #000000;
-	font-weight: 500;
+	font-weight: normal;
 }
 `
 
