@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -29,15 +31,34 @@ const unsplitSVG = `<?xml version="1.0" encoding="UTF-8"?>
   <polygon points="16.5,10 12.5,6.5 12.5,13.5" fill="#eeeeec"/>
 </svg>`
 
-const downloadSVG = `<?xml version="1.0" encoding="UTF-8"?>
+const downloadSVGTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-  <path d="m 8 1 c -0.55 0 -1 0.45 -1 1 v 7.586 l -2.293 -2.293 c -0.39 -0.39 -1.023 -0.39 -1.414 0 s -0.39 1.023 0 1.414 l 4 4 c 0.39 0.39 1.023 0.39 1.414 0 l 4 -4 c 0.39 -0.39 0.39 -1.023 0 -1.414 s -1.023 -0.39 -1.414 0 l -2.293 2.293 v -7.586 c 0 -0.55 -0.45 -1 -1 -1 z m -7 13 v 2 h 14 v -2 z" fill="#2e3436"/>
+  <path d="m 8 1 c -0.55 0 -1 0.45 -1 1 v 7.586 l -2.293 -2.293 c -0.39 -0.39 -1.023 -0.39 -1.414 0 s -0.39 1.023 0 1.414 l 4 4 c 0.39 0.39 1.023 0.39 1.414 0 l 4 -4 c 0.39 -0.39 0.39 -1.023 0 -1.414 s -1.023 -0.39 -1.414 0 l -2.293 2.293 v -7.586 c 0 -0.55 -0.45 -1 -1 -1 z m -7 13 v 2 h 14 v -2 z" fill="%s"/>
 </svg>`
 
-// Upload icon: Tray at bottom with arrow pointing UP out of the tray (reverse of download)
-const uploadSVG = `<?xml version="1.0" encoding="UTF-8"?>
+const uploadSVGTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-  <path d="m 8 13 c 0.55 0 1 -0.45 1 -1 v -7.586 l 2.293 2.293 c 0.39 0.39 1.023 0.39 1.414 0 s 0.39 -1.023 0 -1.414 l -4 -4 c -0.39 -0.39 -1.023 -0.39 -1.414 0 l -4 4 c -0.39 0.39 -0.39 1.023 0 1.414 s 1.023 0.39 1.414 0 l 2.293 -2.293 v 7.586 c 0 0.55 0.45 1 1 1 z m -7 1 v 2 h 14 v -2 z" fill="#2e3436"/>
+  <path d="m 8 13 c 0.55 0 1 -0.45 1 -1 v -7.586 l 2.293 2.293 c 0.39 0.39 1.023 0.39 1.414 0 s 0.39 -1.023 0 -1.414 l -4 -4 c -0.39 -0.39 -1.023 -0.39 -1.414 0 l -4 4 c -0.39 0.39 -0.39 1.023 0 1.414 s 1.023 0.39 1.414 0 l 2.293 -2.293 v 7.586 c 0 0.55 0.45 1 1 1 z m -7 1 v 2 h 14 v -2 z" fill="%s"/>
+</svg>`
+
+// Classic crescent moon 🌙 matching emoji
+const moonSVG = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24">
+  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="#e5a50a"/>
+</svg>`
+
+// Radiant Sun ☀️ with glowing center and rays
+const sunSVG = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f5c211" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="4.5" fill="#f5c211"/>
+  <line x1="12" y1="1" x2="12" y2="3.5"/>
+  <line x1="12" y1="20.5" x2="12" y2="23"/>
+  <line x1="4.22" y1="4.22" x2="5.99" y2="5.99"/>
+  <line x1="18.01" y1="18.01" x2="19.78" y2="19.78"/>
+  <line x1="1" y1="12" x2="3.5" y2="12"/>
+  <line x1="20.5" y1="12" x2="23" y2="12"/>
+  <line x1="4.22" y1="19.78" x2="5.99" y2="18.01"/>
+  <line x1="18.01" y1="5.99" x2="19.78" y2="4.22"/>
 </svg>`
 
 // GetSplitHorizontalImage returns a crisp GTK Image representing top/bottom screen split
@@ -55,14 +76,32 @@ func GetUnsplitImage() *gtk.Image {
 	return imageFromSVG(unsplitSVG, "view-restore-symbolic")
 }
 
-// GetDownloadImage returns the download icon (arrow pointing into tray)
-func GetDownloadImage() *gtk.Image {
-	return imageFromSVG(downloadSVG, "document-save-symbolic")
+// GetDownloadImage returns the download icon (arrow pointing into tray) with theme-adaptive contrast
+func GetDownloadImage(isDark bool) *gtk.Image {
+	color := "#2e3436"
+	if isDark {
+		color = "#eeeeee"
+	}
+	return imageFromSVG(fmt.Sprintf(downloadSVGTemplate, color), "document-save-symbolic")
 }
 
-// GetUploadImage returns the upload icon (arrow pointing up from tray)
-func GetUploadImage() *gtk.Image {
-	return imageFromSVG(uploadSVG, "document-send-symbolic")
+// GetUploadImage returns the upload icon (arrow pointing up from tray) with theme-adaptive contrast
+func GetUploadImage(isDark bool) *gtk.Image {
+	color := "#2e3436"
+	if isDark {
+		color = "#eeeeee"
+	}
+	return imageFromSVG(fmt.Sprintf(uploadSVGTemplate, color), "document-send-symbolic")
+}
+
+// GetMoonImage returns an unmistakable crescent moon 🌙 image
+func GetMoonImage() *gtk.Image {
+	return imageFromSVG(moonSVG, "weather-clear-night-symbolic")
+}
+
+// GetSunImage returns a clear sun ☀️ image
+func GetSunImage() *gtk.Image {
+	return imageFromSVG(sunSVG, "weather-clear-symbolic")
 }
 
 func imageFromSVG(svgData string, fallbackIcon string) *gtk.Image {

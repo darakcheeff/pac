@@ -45,7 +45,8 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	box.SetSizeRequest(10, -1)
+	box.SetMarginStart(4)
+	box.SetMarginEnd(2)
 
 	// TreeStore: ID (string), Name (string), Icon (string), Type (string), Protocol (string)
 	treeStore, err := gtk.TreeStoreNew(glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING)

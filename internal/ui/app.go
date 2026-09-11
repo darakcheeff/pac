@@ -406,6 +406,10 @@ func (app *AppWindow) applyTheme(theme string) {
 		_ = app.themeProvider.LoadFromData(cssData)
 	}
 
+	if app.SFTPPanel != nil {
+		app.SFTPPanel.UpdateTheme(isDark)
+	}
+
 	app.updateThemeButton()
 }
 
@@ -415,12 +419,12 @@ func (app *AppWindow) updateThemeButton() {
 		return
 	}
 	if app.currentTheme == "dark" {
-		app.btnTheme.SetIconName("weather-clear-symbolic")
-		app.btnTheme.SetTooltipText(i18n.T("Переключить на светлую тему (Солнце)", "Switch to Light theme (Sun)"))
+		app.btnTheme.SetIconWidget(GetSunImage())
+		app.btnTheme.SetTooltipText(i18n.T("Переключить на светлую тему", "Switch to Light theme"))
 		app.btnTheme.SetLabel(i18n.T("Светлая тема", "Light Theme"))
 	} else {
-		app.btnTheme.SetIconName("weather-clear-night-symbolic")
-		app.btnTheme.SetTooltipText(i18n.T("Переключить на тёмную тему (Луна)", "Switch to Dark theme (Moon)"))
+		app.btnTheme.SetIconWidget(GetMoonImage())
+		app.btnTheme.SetTooltipText(i18n.T("Переключить на тёмную тему", "Switch to Dark theme"))
 		app.btnTheme.SetLabel(i18n.T("Тёмная тема", "Dark Theme"))
 	}
 	app.btnTheme.ShowAll()
@@ -499,20 +503,21 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	broadcastBar, _ := NewBroadcastBar(manager)
 
 	// Left vertical split: Hosts (top) + SFTP (bottom)
-	leftPaned.Pack1(hostTree.Box, true, true)
-	leftPaned.Pack2(sftpPanel.Box, true, true)
-	leftPaned.SetPosition(250)
+	leftPaned.Pack1(hostTree.Box, true, false)
+	leftPaned.Pack2(sftpPanel.Box, true, false)
+	leftPaned.SetPosition(260)
 
 	// Center horizontal split: Left Sidebar + Center Terminals
 	// leftPaned doesn't expand on window resize; tabView takes all extra width
-	centerPaned.Pack1(leftPaned, false, true)
-	centerPaned.Pack2(tabView.Notebook, true, true)
-	centerPaned.SetPosition(240)
+	// shrink=false guarantees left sidebar is never pushed out of window boundaries
+	centerPaned.Pack1(leftPaned, false, false)
+	centerPaned.Pack2(tabView.Notebook, true, false)
+	centerPaned.SetPosition(280)
 
 	// Main horizontal split: (Left Sidebar + Center Terminals) + Notes Panel (Right)
 	// centerPaned takes all window resize; notesPanel stays docked on right
-	mainPaned.Pack1(centerPaned, true, true)
-	mainPaned.Pack2(notesPanel.Box, false, true)
+	mainPaned.Pack1(centerPaned, true, false)
+	mainPaned.Pack2(notesPanel.Box, false, false)
 	mainPaned.SetPosition(750)
 
 	// Notes panel hidden by default to maximize terminal space

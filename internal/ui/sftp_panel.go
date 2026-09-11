@@ -35,6 +35,8 @@ type SFTPPanel struct {
 	ProgressBar   *gtk.ProgressBar
 	ProgressBox   *gtk.Box
 	StatusLabel   *gtk.Label
+	UploadBtn     *gtk.Button
+	DownloadBtn   *gtk.Button
 	client        *sftp.Client
 	watcherMgr    *watcher.RemoteEditManager
 	currentHostID string
@@ -48,13 +50,14 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	if err != nil {
 		return nil, err
 	}
-	box.SetSizeRequest(10, -1)
+	box.SetMarginStart(4)
+	box.SetMarginEnd(2)
 
 	// Top toolbar (Path + Action buttons)
 	topBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 2)
-	topBox.SetMarginStart(4)
-	topBox.SetMarginEnd(4)
-	topBox.SetMarginTop(4)
+	topBox.SetMarginStart(2)
+	topBox.SetMarginEnd(2)
+	topBox.SetMarginTop(2)
 
 	upBtn, _ := gtk.ButtonNewFromIconName("go-up-symbolic", gtk.ICON_SIZE_BUTTON)
 	upBtn.SetTooltipText(i18n.T("Перейти в родительский каталог (Вверх)", "Go to parent directory (Up)"))
@@ -69,12 +72,12 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	topBox.PackStart(mkdirBtn, false, false, 0)
 
 	uploadBtn, _ := gtk.ButtonNew()
-	uploadBtn.SetImage(GetUploadImage())
+	uploadBtn.SetImage(GetUploadImage(true))
 	uploadBtn.SetTooltipText(i18n.T("Выгрузить файлы на сервер (Upload)", "Upload files to server"))
 	topBox.PackStart(uploadBtn, false, false, 0)
 
 	downloadBtn, _ := gtk.ButtonNew()
-	downloadBtn.SetImage(GetDownloadImage())
+	downloadBtn.SetImage(GetDownloadImage(true))
 	downloadBtn.SetTooltipText(i18n.T("Скачать выбранный файл (Download)", "Download selected file"))
 	topBox.PackStart(downloadBtn, false, false, 0)
 
@@ -153,6 +156,8 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		ProgressBar: pBar,
 		ProgressBox: progressBox,
 		StatusLabel: statusLabel,
+		UploadBtn:   uploadBtn,
+		DownloadBtn: downloadBtn,
 		watcherMgr:  watcherMgr,
 	}
 
@@ -921,4 +926,19 @@ func (sp *SFTPPanel) showError(title, msg string) {
 	dlg.SetTitle(title)
 	dlg.Run()
 	dlg.Destroy()
+}
+
+// UpdateTheme updates SFTP button icons based on dark/light mode
+func (p *SFTPPanel) UpdateTheme(isDark bool) {
+	if p == nil {
+		return
+	}
+	if p.UploadBtn != nil {
+		p.UploadBtn.SetImage(GetUploadImage(isDark))
+		p.UploadBtn.ShowAll()
+	}
+	if p.DownloadBtn != nil {
+		p.DownloadBtn.SetImage(GetDownloadImage(isDark))
+		p.DownloadBtn.ShowAll()
+	}
 }
