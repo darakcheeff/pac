@@ -277,6 +277,13 @@ func (s *Session) SendInput(input string) error {
 	return err
 }
 
+// IsClosed returns true if session has been terminated or closed
+func (s *Session) IsClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 // Close closes session and all underlying resources
 func (s *Session) Close() error {
 	s.mu.Lock()

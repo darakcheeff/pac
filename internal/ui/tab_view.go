@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/darakcheeff/pac/internal/i18n"
@@ -67,14 +68,22 @@ func areWidgetsEqual(w1, w2 gtk.IWidget) bool {
 
 // TerminalPane represents an individual terminal pane inside a tab
 type TerminalPane struct {
-	Session         *session.Session
-	Terminal        *vte.Terminal
-	Box             *gtk.Box
-	Search          *SearchBar
-	TabItem         *TabItem
-	ParentSessionID string
-	SplitDirection  string
+	Session           *session.Session
+	Terminal          *vte.Terminal
+	Box               *gtk.Box
+	Search            *SearchBar
+	TabItem           *TabItem
+	ParentSessionID   string
+	SplitDirection    string
+	HasUnreadActivity bool
 }
+
+const (
+	ColorTabAlive    = "#2ec27e" // Green: alive, connected, no unread changes
+	ColorTabActivity = "#3584e4" // Blue: changes occurred while not in focus
+	ColorTabDead     = "#e01b24" // Red: connection closed / disconnected
+	ColorTabSep      = "#888888" // Gray: separator '+'
+)
 
 // TabItem represents one open session tab inside the notebook (can hold multiple split panes)
 type TabItem struct {
@@ -111,6 +120,92 @@ type TabView struct {
 	OnNewConnection        func()
 	OnNewLocalTerminal     func()
 	OnClusterAdmin         func()
+}
+
+
+func (tv *TabView) isPaneFocused(pane *TerminalPane) bool {
+	if pane == nil || pane.TabItem == nil {
+		return false
+	}
+	curTab := tv.GetCurrentTab()
+	if curTab != pane.TabItem {
+		return false
+	}
+	if len(pane.TabItem.Panes) <= 1 {
+		return true
+	}
+	return pane.TabItem.FocusedPane == pane
+}
+
+func (tv *TabView) getPaneColor(p *TerminalPane) string {
+	if (p.Terminal != nil && p.Terminal.IsDisconnected()) || (p.Session != nil && p.Session.IsClosed()) {
+		return ColorTabDead
+	}
+	if p.HasUnreadActivity {
+		return ColorTabActivity
+	}
+	return ColorTabAlive
+}
+
+func (tv *TabView) getPaneTitle(p *TerminalPane) string {
+	if p == nil {
+		return "Terminal"
+	}
+	if p.Session != nil && p.Session.Title != "" {
+		return p.Session.Title
+	}
+	if p.Session != nil && p.Session.Host != nil && p.Session.Host.Name != "" {
+		return p.Session.Host.Name
+	}
+	return "Terminal"
+}
+
+// UpdateTabTitle formats tab title with each session colored individually according to state
+func (tv *TabView) UpdateTabTitle(item *TabItem) {
+	if item == nil || item.Label == nil {
+		return
+	}
+
+	if len(item.Panes) == 0 {
+		title := "Terminal"
+		if item.Session != nil && item.Session.Title != "" {
+			title = item.Session.Title
+		}
+		item.Label.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, ColorTabAlive, glib.MarkupEscapeText(title)))
+		return
+	}
+
+	var parts []string
+	var plainParts []string
+	for _, p := range item.Panes {
+		pTitle := tv.getPaneTitle(p)
+		plainParts = append(plainParts, pTitle)
+		color := tv.getPaneColor(p)
+		escaped := glib.MarkupEscapeText(pTitle)
+		parts = append(parts, fmt.Sprintf(`<span foreground="%s">%s</span>`, color, escaped))
+	}
+
+	sep := fmt.Sprintf(` <span foreground="%s">+</span> `, ColorTabSep)
+	fullMarkup := strings.Join(parts, sep)
+	item.Label.SetMarkup(fullMarkup)
+
+	plainTitle := strings.Join(plainParts, " + ")
+	tv.Notebook.SetMenuLabelText(item.ContentBox, plainTitle)
+}
+
+// UpdateTabTitleForSession updates title of the tab holding the session
+func (tv *TabView) UpdateTabTitleForSession(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	for _, item := range tv.items {
+		for _, pane := range item.Panes {
+			if pane.Session == sess {
+				tv.UpdateTabTitle(item)
+				return
+			}
+		}
+	}
 }
 
 // NewTabView initializes the GTK Notebook tab manager
@@ -156,6 +251,13 @@ func NewTabView() (*TabView, error) {
 
 		item := tv.GetCurrentTab()
 		if item != nil {
+			if item.FocusedPane != nil {
+				item.FocusedPane.HasUnreadActivity = false
+			} else if len(item.Panes) > 0 {
+				item.Panes[0].HasUnreadActivity = false
+			}
+			tv.UpdateTabTitle(item)
+
 			if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
 				item.FocusedPane.Terminal.GrabFocus()
 				tv.lastActiveSession = item.FocusedPane.Session
@@ -257,12 +359,32 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		TabItem:  item,
 	}
 
+	term.OnContentsChanged = func() {
+		glib.IdleAdd(func() {
+			if pane == nil || pane.TabItem == nil {
+				return
+			}
+			if !tv.isPaneFocused(pane) {
+				if !pane.HasUnreadActivity {
+					pane.HasUnreadActivity = true
+					tv.UpdateTabTitle(pane.TabItem)
+				}
+			}
+		})
+	}
+
 	// Focus and click handling
 	term.Widget.Connect("button-press-event", func(_ *glib.Object, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
+		}
+		if pane.HasUnreadActivity {
+			pane.HasUnreadActivity = false
+			if pane.TabItem != nil {
+				tv.UpdateTabTitle(pane.TabItem)
+			}
 		}
 		if (!wasFocused || tv.lastActiveSession != sess) && tv.OnTabChanged != nil {
 			tv.lastActiveSession = sess
@@ -279,6 +401,12 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
+		}
+		if pane.HasUnreadActivity {
+			pane.HasUnreadActivity = false
+			if pane.TabItem != nil {
+				tv.UpdateTabTitle(pane.TabItem)
+			}
 		}
 		if (!wasFocused || tv.lastActiveSession != sess) && tv.OnTabChanged != nil {
 			tv.lastActiveSession = sess
@@ -306,8 +434,6 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	tabBox.SetMarginStart(2)
 	tabBox.SetMarginEnd(2)
 
-	icon, _ := gtk.ImageNewFromIconName("utilities-terminal-symbolic", gtk.ICON_SIZE_MENU)
-	tabBox.PackStart(icon, false, false, 0)
 
 	titleLabel, _ := gtk.LabelNew(sess.Title)
 	tabBox.PackStart(titleLabel, true, true, 0)
@@ -333,6 +459,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	pane := tv.createPane(item, sess, term)
 	item.Panes = append(item.Panes, pane)
 	item.FocusedPane = pane
+	tv.UpdateTabTitle(item)
 
 	contentBox.PackStart(pane.Box, true, true, 0)
 	contentBox.ShowAll()
@@ -517,6 +644,7 @@ func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTe
 
 	item.Panes = append(item.Panes, newPane)
 	item.FocusedPane = newPane
+	tv.UpdateTabTitle(item)
 
 	item.ContentBox.ShowAll()
 	newTerm.GrabFocus()
@@ -587,6 +715,7 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 		}
 	}
 	item.Panes = newPanes
+	tv.UpdateTabTitle(item)
 
 	if pane.Session != nil {
 		_ = pane.Session.Close()
@@ -622,8 +751,6 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 	tabBox.SetMarginStart(2)
 	tabBox.SetMarginEnd(2)
 
-	icon, _ := gtk.ImageNewFromIconName("utilities-terminal-symbolic", gtk.ICON_SIZE_MENU)
-	tabBox.PackStart(icon, false, false, 0)
 
 	titleLabel, _ := gtk.LabelNew(pane.Session.Title)
 	tabBox.PackStart(titleLabel, true, true, 0)
@@ -650,6 +777,7 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 	pane.TabItem = item
 	pane.SplitDirection = ""
 	pane.ParentSessionID = ""
+	tv.UpdateTabTitle(item)
 
 	// Ensure pane.Box has no lingering parent before packing
 	removeWidgetFromParent(pane.Box)
@@ -781,10 +909,8 @@ func (tv *TabView) UnsplitTab(item *TabItem) {
 		if item.Session == pane.Session {
 			item.Session = item.Panes[0].Session
 			item.ID = item.Session.ID
-			if item.Label != nil {
-				item.Label.SetText(item.Session.Title)
-			}
 		}
+		tv.UpdateTabTitle(item)
 	}
 
 	item.ContentBox.ShowAll()
@@ -965,7 +1091,7 @@ func (tv *TabView) showRenameDialog(item *TabItem) {
 		newTitle, _ := entry.GetText()
 		if newTitle != "" {
 			item.Session.Title = newTitle
-			item.Label.SetText(newTitle)
+			tv.UpdateTabTitle(item)
 		}
 	}
 	dlg.Destroy()
@@ -1203,12 +1329,14 @@ func (tv *TabView) UpdateSessionForTerminal(term *vte.Terminal, newSess *session
 		for _, pane := range item.Panes {
 			if pane.Terminal == term {
 				pane.Session = newSess
+				pane.HasUnreadActivity = false
 				if item.Session == nil || item.Panes[0] == pane {
 					item.Session = newSess
 				}
 				if item.FocusedPane == pane && tv.OnTabChanged != nil {
 					tv.OnTabChanged(newSess)
 				}
+				tv.UpdateTabTitle(item)
 				return
 			}
 		}
@@ -1368,6 +1496,7 @@ func (tv *TabView) MergeTabInto(targetTab, sourceTab *TabItem, vertical bool) er
 	})
 
 	targetTab.ContentBox.ShowAll()
+	tv.UpdateTabTitle(targetTab)
 	if targetTab.FocusedPane != nil && targetTab.FocusedPane.Terminal != nil {
 		targetTab.FocusedPane.Terminal.GrabFocus()
 		if tv.OnTabChanged != nil && targetTab.FocusedPane.Session != nil {

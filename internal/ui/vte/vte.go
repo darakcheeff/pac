@@ -49,6 +49,11 @@ static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gp
 extern int goOnVteKeyPress(GtkWidget* widget, guint keyval);
 extern void goOnVteDirectoryChanged(GtkWidget* widget, char* uri);
 extern void goOnVteTitleChanged(GtkWidget* widget, char* title);
+extern void goOnVteContentsChanged(GtkWidget* widget);
+
+static void on_vte_contents_changed(VteTerminal* term, gpointer user_data) {
+    goOnVteContentsChanged((GtkWidget*)term);
+}
 
 static void on_vte_directory_uri_changed(VteTerminal* term, gpointer user_data) {
     const char* uri = vte_terminal_get_current_directory_uri(term);
@@ -111,6 +116,7 @@ static void configure_vte_terminal(GtkWidget* w) {
     g_signal_connect(w, "button-press-event", G_CALLBACK(on_vte_button_press), NULL);
     g_signal_connect(w, "current-directory-uri-changed", G_CALLBACK(on_vte_directory_uri_changed), NULL);
     g_signal_connect(w, "window-title-changed", G_CALLBACK(on_vte_window_title_changed), NULL);
+    g_signal_connect(w, "contents-changed", G_CALLBACK(on_vte_contents_changed), NULL);
 }
 
 static int create_vte_native_pty(GtkWidget* term, char* slave_path, size_t slave_path_len, GError** error) {
@@ -318,6 +324,22 @@ func goOnVteTitleChanged(widget *C.GtkWidget, cTitle *C.char) {
 	}
 }
 
+//export goOnVteContentsChanged
+func goOnVteContentsChanged(widget *C.GtkWidget) {
+	termRegistryMu.Lock()
+	t := termRegistry[uintptr(unsafe.Pointer(widget))]
+	termRegistryMu.Unlock()
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	cb := t.OnContentsChanged
+	t.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
 //export goOnVteKeyPress
 func goOnVteKeyPress(widget *C.GtkWidget, keyval C.guint) C.int {
 	termRegistryMu.Lock()
@@ -382,6 +404,7 @@ type Terminal struct {
 	OnResize           func(rows, cols int)
 	OnReconnect        func()
 	OnDirectoryChanged func(path string)
+	OnContentsChanged  func()
 	isDisconnected     bool
 	cmdLine            strings.Builder
 	mu                 sync.Mutex

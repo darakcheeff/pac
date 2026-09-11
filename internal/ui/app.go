@@ -50,10 +50,13 @@ type AppWindow struct {
 	restoreMu     sync.Mutex
 	lastSavedHash string
 	lastSavedMu   sync.Mutex
+	currentTheme  string
+	btnTheme      *gtk.ToolButton
+	themeProvider *gtk.CssProvider
 }
 
 
-const compactCSS = `
+const baseCompactCSS = `
 toolbar {
 	padding: 1px 2px;
 	min-height: 28px;
@@ -73,6 +76,7 @@ notebook tab button {
 	padding: 0;
 	min-height: 16px;
 	min-width: 16px;
+	border-radius: 3px;
 }
 treeview {
 	font-size: 11px;
@@ -96,7 +100,6 @@ menubar > menuitem {
 paned > separator {
 	min-width: 3px;
 	min-height: 3px;
-	background-color: rgba(0, 0, 0, 0.12);
 }
 entry {
 	min-height: 24px;
@@ -109,13 +112,273 @@ button {
 }
 `
 
-func applyCompactTheme() {
-	cssProvider, err := gtk.CssProviderNew()
-	if err == nil {
-		_ = cssProvider.LoadFromData(compactCSS)
-		screen, err := gdk.ScreenGetDefault()
-		if err == nil && screen != nil {
-			gtk.AddProviderForScreen(screen, cssProvider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+const darkCSS = baseCompactCSS + `
+window, dialog {
+	background-color: #2b2b2b;
+	color: #eeeeee;
+}
+toolbar {
+	background-color: #323232;
+	color: #eeeeee;
+	border-bottom: 1px solid #202020;
+}
+toolbar button {
+	color: #eeeeee;
+}
+toolbar button:hover {
+	background-color: #444444;
+}
+menubar {
+	background-color: #2d2d2d;
+	color: #eeeeee;
+	border-bottom: 1px solid #202020;
+}
+menubar > menuitem {
+	color: #eeeeee;
+}
+menubar > menuitem:hover {
+	background-color: #404040;
+}
+menu, .menu {
+	background-color: #2d2d2d;
+	color: #eeeeee;
+	border: 1px solid #404040;
+}
+menuitem {
+	color: #eeeeee;
+}
+menuitem:hover {
+	background-color: #3584e4;
+	color: #ffffff;
+}
+treeview {
+	background-color: #242424;
+	color: #eeeeee;
+}
+treeview:selected {
+	background-color: #1a5fb4;
+	color: #ffffff;
+}
+treeview header button {
+	background-color: #303030;
+	color: #cccccc;
+	border-bottom: 1px solid #202020;
+}
+notebook header {
+	background-color: #282828;
+	border-bottom: 1px solid #1e1e1e;
+}
+notebook tab {
+	background-color: #2e2e2e;
+	color: #cccccc;
+	border: 1px solid #202020;
+	border-bottom: none;
+}
+notebook tab:checked, notebook tab:active {
+	background-color: #383838;
+	color: #ffffff;
+}
+notebook tab button {
+	color: #aaaaaa;
+}
+notebook tab button:hover {
+	color: #ffffff;
+	background-color: rgba(255, 255, 255, 0.18);
+}
+statusbar {
+	background-color: #282828;
+	color: #aaaaaa;
+	border-top: 1px solid #202020;
+}
+entry {
+	background-color: #1e1e1e;
+	color: #ffffff;
+	border: 1px solid #454545;
+}
+entry:focus {
+	border-color: #3584e4;
+}
+paned > separator {
+	background-color: #1e1e1e;
+}
+button {
+	background-color: #383838;
+	color: #eeeeee;
+	border: 1px solid #484848;
+}
+button:hover {
+	background-color: #484848;
+}
+button:active {
+	background-color: #252525;
+}
+`
+
+const lightCSS = baseCompactCSS + `
+window, dialog {
+	background-color: #f6f6f6;
+	color: #2e3436;
+}
+toolbar {
+	background-color: #ebebeb;
+	color: #2e3436;
+	border-bottom: 1px solid #d0d0d0;
+}
+toolbar button {
+	color: #2e3436;
+}
+toolbar button:hover {
+	background-color: #dedede;
+}
+menubar {
+	background-color: #f0f0f0;
+	color: #2e3436;
+	border-bottom: 1px solid #d0d0d0;
+}
+menubar > menuitem {
+	color: #2e3436;
+}
+menubar > menuitem:hover {
+	background-color: #e0e0e0;
+}
+menu, .menu {
+	background-color: #ffffff;
+	color: #2e3436;
+	border: 1px solid #cccccc;
+}
+menuitem {
+	color: #2e3436;
+}
+menuitem:hover {
+	background-color: #3584e4;
+	color: #ffffff;
+}
+treeview {
+	background-color: #ffffff;
+	color: #2e3436;
+}
+treeview:selected {
+	background-color: #3584e4;
+	color: #ffffff;
+}
+treeview header button {
+	background-color: #ececec;
+	color: #555555;
+	border-bottom: 1px solid #d0d0d0;
+}
+notebook header {
+	background-color: #e8e8e8;
+	border-bottom: 1px solid #cccccc;
+}
+notebook tab {
+	background-color: #dedede;
+	color: #555555;
+	border: 1px solid #cccccc;
+	border-bottom: none;
+}
+notebook tab:checked, notebook tab:active {
+	background-color: #ffffff;
+	color: #2e3436;
+}
+notebook tab button {
+	color: #666666;
+}
+notebook tab button:hover {
+	color: #000000;
+	background-color: rgba(0, 0, 0, 0.1);
+}
+statusbar {
+	background-color: #ececec;
+	color: #555555;
+	border-top: 1px solid #cccccc;
+}
+entry {
+	background-color: #ffffff;
+	color: #2e3436;
+	border: 1px solid #cccccc;
+}
+entry:focus {
+	border-color: #3584e4;
+}
+paned > separator {
+	background-color: #cccccc;
+}
+button {
+	background-color: #f0f0f0;
+	color: #2e3436;
+	border: 1px solid #cccccc;
+}
+button:hover {
+	background-color: #e4e4e4;
+}
+button:active {
+	background-color: #d8d8d8;
+}
+`
+
+// applyTheme configures GTK dark/light theme and custom styling
+func (app *AppWindow) applyTheme(theme string) {
+	if theme == "" {
+		theme = "dark"
+	}
+	app.currentTheme = theme
+	isDark := theme == "dark"
+
+	settings, err := gtk.SettingsGetDefault()
+	if err == nil && settings != nil {
+		_ = settings.SetProperty("gtk-application-prefer-dark-theme", isDark)
+	}
+
+	cssData := darkCSS
+	if !isDark {
+		cssData = lightCSS
+	}
+
+	if app.themeProvider == nil {
+		provider, err := gtk.CssProviderNew()
+		if err == nil {
+			app.themeProvider = provider
+			screen, err := gdk.ScreenGetDefault()
+			if err == nil && screen != nil {
+				gtk.AddProviderForScreen(screen, app.themeProvider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+			}
+		}
+	}
+
+	if app.themeProvider != nil {
+		_ = app.themeProvider.LoadFromData(cssData)
+	}
+
+	app.updateThemeButton()
+}
+
+// updateThemeButton updates icon and tooltip for theme toggle button
+func (app *AppWindow) updateThemeButton() {
+	if app.btnTheme == nil {
+		return
+	}
+	if app.currentTheme == "dark" {
+		app.btnTheme.SetIconName("weather-clear-symbolic")
+		app.btnTheme.SetTooltipText(i18n.T("Переключить на светлую тему (Солнце)", "Switch to Light theme (Sun)"))
+		app.btnTheme.SetLabel(i18n.T("Светлая тема", "Light Theme"))
+	} else {
+		app.btnTheme.SetIconName("weather-clear-night-symbolic")
+		app.btnTheme.SetTooltipText(i18n.T("Переключить на тёмную тему (Луна)", "Switch to Dark theme (Moon)"))
+		app.btnTheme.SetLabel(i18n.T("Тёмная тема", "Dark Theme"))
+	}
+}
+
+// ToggleTheme switches between dark and light themes and persists user preference
+func (app *AppWindow) ToggleTheme() {
+	newTheme := "light"
+	if app.currentTheme == "light" {
+		newTheme = "dark"
+	}
+	app.applyTheme(newTheme)
+	if app.settings != nil {
+		app.settings.Theme = newTheme
+		if app.store != nil {
+			_ = app.store.SaveSetting("theme", newTheme)
 		}
 	}
 }
@@ -127,7 +390,6 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	}
 	win.SetTitle("PAC Connection Manager NextGen")
 	win.SetDefaultSize(1200, 750)
-	applyCompactTheme()
 
 	// Connect OSC 52 terminal clipboard sequences to system clipboard
 	session.GlobalClipboardHandler = func(target, text string) {
@@ -235,6 +497,13 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	app.setupMenuAndToolbar()
 	app.setupSignals()
+
+	// Apply initial theme from settings (default to dark)
+	initTheme := "dark"
+	if settings != nil && settings.Theme == "light" {
+		initTheme = "light"
+	}
+	app.applyTheme(initTheme)
 
 	// Periodic auto-save of active session state (every 30 seconds with diff checking)
 	go func() {
@@ -388,6 +657,19 @@ func (app *AppWindow) setupMenuAndToolbar() {
 		}
 	})
 	app.ToolBar.Insert(btnImport, -1)
+
+	// Separator
+	sepTool3, _ := gtk.SeparatorToolItemNew()
+	app.ToolBar.Insert(sepTool3, -1)
+
+	// 9. Theme Toggle (Sun / Moon)
+	btnTheme, _ := gtk.ToolButtonNew(nil, i18n.T("Тема", "Theme"))
+	app.btnTheme = btnTheme
+	btnTheme.Connect("clicked", func() {
+		app.ToggleTheme()
+	})
+	app.ToolBar.Insert(btnTheme, -1)
+	app.updateThemeButton()
 }
 
 
@@ -743,7 +1025,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 
 	bridge := pty.FromSlave(slaveFile)
 	go func() {
-		newSess, err := session.StartSessionWithBridge(context.Background(), targetHost, tab.Session.Title+i18n.T(" [сплит]", " [split]"), app.settings.DefaultLogsDir, bridge, nil)
+		newSess, err := session.StartSessionWithBridge(context.Background(), targetHost, tab.Session.Title, app.settings.DefaultLogsDir, bridge, nil)
 		glib.IdleAdd(func() {
 			if err != nil {
 				app.StatusLabel.SetText(i18n.T("Ошибка создания сплита: ", "Error creating split: ") + err.Error())
@@ -770,7 +1052,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 				app.SaveAllSessionState()
 			}
 
-			app.attachSessionExitHandler(newSess, term, targetHost, tab.Session.Title+i18n.T(" [сплит]", " [split]"))
+			app.attachSessionExitHandler(newSess, term, targetHost, tab.Session.Title)
 		})
 	}()
 }
@@ -1288,6 +1570,7 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 			}
 
 			term.SetDisconnected(true, reconnectFunc)
+			app.TabView.UpdateTabTitleForSession(sess)
 		})
 	}
 }
