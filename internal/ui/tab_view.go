@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/session"
@@ -96,6 +97,8 @@ type TabView struct {
 	plusBtn                *gtk.Button
 	plusEventBox           *gtk.EventBox
 	hasPlusTab             bool
+	lastPlusClick          time.Time
+	isClosingTab           bool
 	OnTabChanged           func(sess *session.Session)
 	OnTabClosed            func(sess *session.Session)
 	OnSplitRequested       func(sess *session.Session, vertical bool)
@@ -137,15 +140,14 @@ func NewTabView() (*TabView, error) {
 		if tv.plusContent != nil && tv.hasPlusTab {
 			plusIdx := tv.Notebook.PageNum(tv.plusContent)
 			if plusIdx >= 0 && int(pageNum) == plusIdx {
+				// Plus tab was navigated to (e.g. by GTK removing a prior tab or keyboard nav).
+				// Do NOT automatically create a new terminal here!
 				glib.IdleAdd(func() {
 					if len(tv.items) > 0 {
-						prev := plusIdx - 1
-						if prev >= 0 {
-							tv.Notebook.SetCurrentPage(prev)
+						target := len(tv.items) - 1
+						if target >= 0 {
+							tv.Notebook.SetCurrentPage(target)
 						}
-					}
-					if tv.OnNewLocalTerminal != nil {
-						tv.OnNewLocalTerminal()
 					}
 				})
 				return
@@ -167,10 +169,27 @@ func NewTabView() (*TabView, error) {
 					tv.OnTabChanged(item.Panes[0].Session)
 				}
 			}
+		} else {
+			tv.lastActiveSession = nil
+			if tv.OnTabChanged != nil {
+				tv.OnTabChanged(nil)
+			}
 		}
 	})
 
 	return tv, nil
+}
+
+// triggerNewLocalTerminal executes OnNewLocalTerminal with a debounce to prevent double-clicks
+func (tv *TabView) triggerNewLocalTerminal() {
+	now := time.Now()
+	if now.Sub(tv.lastPlusClick) < 300*time.Millisecond {
+		return
+	}
+	tv.lastPlusClick = now
+	if tv.OnNewLocalTerminal != nil {
+		tv.OnNewLocalTerminal()
+	}
 }
 
 // initPlusTab creates the browser-style '+' new tab button that sits immediately to the right of open tabs
@@ -191,17 +210,13 @@ func (tv *TabView) initPlusTab() {
 	btnPlus.SetMarginBottom(0)
 
 	btnPlus.Connect("clicked", func() {
-		if tv.OnNewLocalTerminal != nil {
-			tv.OnNewLocalTerminal()
-		}
+		tv.triggerNewLocalTerminal()
 	})
 
 	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		if btnEvent.Button() == gdk.BUTTON_PRIMARY {
-			if tv.OnNewLocalTerminal != nil {
-				tv.OnNewLocalTerminal()
-			}
+			tv.triggerNewLocalTerminal()
 			return true
 		}
 		return false
@@ -350,6 +365,9 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 			return true
 		} else if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			tv.showTabContextMenu(item, btnEvent.Time())
+			return true
+		} else if btnEvent.Button() == gdk.BUTTON_MIDDLE {
+			tv.CloseTab(item)
 			return true
 		}
 		return false
@@ -668,6 +686,9 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 		} else if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			tv.showTabContextMenu(item, btnEvent.Time())
 			return true
+		} else if btnEvent.Button() == gdk.BUTTON_MIDDLE {
+			tv.CloseTab(item)
+			return true
 		}
 		return false
 	})
@@ -792,6 +813,20 @@ func (tv *TabView) CloseTab(item *TabItem) {
 		return
 	}
 
+	tv.isClosingTab = true
+	defer func() {
+		tv.isClosingTab = false
+	}()
+
+	// Remove from tv.items FIRST so len(tv.items) and GetCurrentTab reflect new state immediately
+	newItems := make([]*TabItem, 0, len(tv.items)-1)
+	for _, it := range tv.items {
+		if it != item {
+			newItems = append(newItems, it)
+		}
+	}
+	tv.items = newItems
+
 	// Close all pane sessions
 	for _, p := range item.Panes {
 		if p.Session != nil {
@@ -807,13 +842,20 @@ func (tv *TabView) CloseTab(item *TabItem) {
 		tv.Notebook.RemovePage(pageNum)
 	}
 
-	newItems := make([]*TabItem, 0, len(tv.items)-1)
-	for _, it := range tv.items {
-		if it != item {
-			newItems = append(newItems, it)
+	if len(tv.items) == 0 {
+		tv.lastActiveSession = nil
+		if tv.OnTabChanged != nil {
+			tv.OnTabChanged(nil)
+		}
+	} else {
+		cur := tv.GetCurrentTab()
+		if cur != nil && cur.FocusedPane != nil && cur.FocusedPane.Session != nil {
+			tv.lastActiveSession = cur.FocusedPane.Session
+			if tv.OnTabChanged != nil {
+				tv.OnTabChanged(cur.FocusedPane.Session)
+			}
 		}
 	}
-	tv.items = newItems
 }
 
 // CloseOtherTabs closes all tabs except the specified one
@@ -851,7 +893,7 @@ func (tv *TabView) CloseAllTabs() {
 // GetCurrentTab returns active selected TabItem
 func (tv *TabView) GetCurrentTab() *TabItem {
 	pageNum := tv.Notebook.GetCurrentPage()
-	if pageNum < 0 || pageNum >= len(tv.items) {
+	if pageNum < 0 {
 		return nil
 	}
 	widget, err := tv.Notebook.GetNthPage(pageNum)
