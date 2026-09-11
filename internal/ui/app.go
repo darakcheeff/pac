@@ -814,8 +814,31 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 		sess, err := session.StartSessionWithBridge(context.Background(), host, host.Name, app.settings.DefaultLogsDir, bridge, jumpClient)
 		glib.IdleAdd(func() {
 			if err != nil {
-				app.StatusLabel.SetText(i18n.T("Ошибка подключения: ", "Connection error: ") + err.Error())
+				errMsg := err.Error()
+				app.StatusLabel.SetText(i18n.T("Ошибка подключения: ", "Connection error: ") + errMsg)
 				log.Printf("[APP] ERROR connecting to host %s: %v", host.Name, err)
+
+				detail := errMsg
+				if host.Protocol == storage.ProtoSerial && strings.Contains(strings.ToLower(errMsg), "permission denied") {
+					hint := i18n.T(
+						"Подсказка: добавьте пользователя в группу dialout:\nsudo usermod -aG dialout $USER\n(или проверьте права доступа к COM-порту)",
+						"Hint: Add user to dialout group:\nsudo usermod -aG dialout $USER\n(or check COM port permissions)",
+					)
+					detail = fmt.Sprintf("%s\n\n%s", detail, hint)
+				}
+
+				msgText := i18n.Tf("Не удалось подключиться к \"%s\":\n\n%s", "Failed to connect to \"%s\":\n\n%s", host.Name, detail)
+				dlg := gtk.MessageDialogNew(
+					app.Window,
+					gtk.DIALOG_MODAL,
+					gtk.MESSAGE_ERROR,
+					gtk.BUTTONS_OK,
+					"%s",
+					msgText,
+				)
+				dlg.SetTitle(i18n.T("Ошибка подключения", "Connection Error"))
+				dlg.Run()
+				dlg.Destroy()
 				return
 			}
 
