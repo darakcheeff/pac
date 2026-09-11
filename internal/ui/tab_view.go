@@ -79,10 +79,17 @@ type TerminalPane struct {
 }
 
 const (
-	ColorTabAlive    = "#2ec27e" // Green: alive, connected, no unread changes
-	ColorTabActivity = "#3584e4" // Blue: changes occurred while not in focus
-	ColorTabDead     = "#e01b24" // Red: connection closed / disconnected
-	ColorTabSep      = "#ffffff" // Gray: separator '+'
+	// Dark theme tab colors (vibrant, bright against dark tabs)
+	ColorDarkTabAlive    = "#2ec27e"
+	ColorDarkTabActivity = "#3584e4"
+	ColorDarkTabDead     = "#e01b24"
+	ColorDarkTabSep      = "#ffffff"
+
+	// Light theme tab colors (deep, rich, saturated, high-contrast against light tabs)
+	ColorLightTabAlive    = "#0e7039" // Saturated deep green
+	ColorLightTabActivity = "#1251a3" // Saturated deep royal blue
+	ColorLightTabDead     = "#b31b24" // Saturated deep crimson red
+	ColorLightTabSep      = "#2e3436" // Dark charcoal separator
 )
 
 // TabItem represents one open session tab inside the notebook (can hold multiple split panes)
@@ -100,6 +107,7 @@ type TabItem struct {
 // TabView manages notebook tabs and terminal splits
 type TabView struct {
 	Notebook               *gtk.Notebook
+	IsDark                 bool
 	items                  []*TabItem
 	lastActiveSession      *session.Session
 	plusContent            *gtk.Box
@@ -138,13 +146,41 @@ func (tv *TabView) isPaneFocused(pane *TerminalPane) bool {
 }
 
 func (tv *TabView) getPaneColor(p *TerminalPane) string {
-	if (p.Terminal != nil && p.Terminal.IsDisconnected()) || (p.Session != nil && p.Session.IsClosed()) {
-		return ColorTabDead
+	isDead := false
+	if p != nil {
+		isDead = (p.Terminal != nil && p.Terminal.IsDisconnected()) || (p.Session != nil && p.Session.IsClosed())
 	}
-	if p.HasUnreadActivity {
-		return ColorTabActivity
+	if tv.IsDark {
+		if isDead {
+			return ColorDarkTabDead
+		}
+		if p != nil && p.HasUnreadActivity {
+			return ColorDarkTabActivity
+		}
+		return ColorDarkTabAlive
 	}
-	return ColorTabAlive
+	if isDead {
+		return ColorLightTabDead
+	}
+	if p != nil && p.HasUnreadActivity {
+		return ColorLightTabActivity
+	}
+	return ColorLightTabAlive
+}
+
+func (tv *TabView) getSepColor() string {
+	if tv.IsDark {
+		return ColorDarkTabSep
+	}
+	return ColorLightTabSep
+}
+
+// SetTheme updates TabView theme mode and refreshes all tab titles
+func (tv *TabView) SetTheme(isDark bool) {
+	tv.IsDark = isDark
+	for _, item := range tv.items {
+		tv.UpdateTabTitle(item)
+	}
 }
 
 func (tv *TabView) getPaneTitle(p *TerminalPane) string {
@@ -171,7 +207,11 @@ func (tv *TabView) UpdateTabTitle(item *TabItem) {
 		if item.Session != nil && item.Session.Title != "" {
 			title = item.Session.Title
 		}
-		item.Label.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, ColorTabAlive, glib.MarkupEscapeText(title)))
+		aliveColor := ColorDarkTabAlive
+		if !tv.IsDark {
+			aliveColor = ColorLightTabAlive
+		}
+		item.Label.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, aliveColor, glib.MarkupEscapeText(title)))
 		return
 	}
 
@@ -185,7 +225,7 @@ func (tv *TabView) UpdateTabTitle(item *TabItem) {
 		parts = append(parts, fmt.Sprintf(`<span foreground="%s">%s</span>`, color, escaped))
 	}
 
-	sep := fmt.Sprintf(` <span foreground="%s" weight="bold">+</span> `, ColorTabSep)
+	sep := fmt.Sprintf(` <span foreground="%s" weight="bold">+</span> `, tv.getSepColor())
 	fullMarkup := strings.Join(parts, sep)
 	item.Label.SetMarkup(fullMarkup)
 
@@ -224,6 +264,7 @@ func NewTabView() (*TabView, error) {
 	tv := &TabView{
 		Notebook: nb,
 		items:    make([]*TabItem, 0),
+		IsDark:   true,
 	}
 
 	tv.initPlusTab()

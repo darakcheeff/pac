@@ -243,6 +243,16 @@ scrollbar slider {
 scrollbar slider:hover {
 	background-color: #555555;
 }
+tooltip, tooltip.background {
+	background-color: #222222;
+	color: #ffffff;
+	border: 1px solid #505050;
+	border-radius: 4px;
+	padding: 4px 8px;
+}
+tooltip label, tooltip * {
+	color: #ffffff;
+}
 `
 
 const lightCSS = baseCompactCSS + `
@@ -376,6 +386,17 @@ scrollbar slider {
 scrollbar slider:hover {
 	background-color: #aaaaaa;
 }
+tooltip, tooltip.background {
+	background-color: #ffffff;
+	color: #000000;
+	border: 1px solid #707070;
+	border-radius: 4px;
+	padding: 4px 8px;
+}
+tooltip label, tooltip * {
+	color: #000000;
+	font-weight: 500;
+}
 `
 
 // applyTheme configures GTK dark/light theme and custom styling
@@ -416,6 +437,9 @@ func (app *AppWindow) applyTheme(theme string) {
 		_ = app.themeProvider.LoadFromData(cssData)
 	}
 
+	if app.TabView != nil {
+		app.TabView.SetTheme(isDark)
+	}
 	if app.SFTPPanel != nil {
 		app.SFTPPanel.UpdateTheme(isDark)
 	}
