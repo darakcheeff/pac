@@ -395,6 +395,8 @@ func (sp *SFTPPanel) LoadDirectory(path string) {
 
 			if err != nil {
 				sp.StatusLabel.SetText(i18n.T("Ошибка: ", "Error: ") + err.Error())
+				sp.showError(i18n.T("Ошибка каталога", "Directory Error"),
+					i18n.Tf("Не удалось загрузить каталог \"%s\":\n\n%s", "Failed to load directory \"%s\":\n\n%s", path, err.Error()))
 				return
 			}
 
@@ -451,6 +453,8 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 				sp.LoadDirectory(sp.client.CurrentDir())
 			} else {
 				sp.StatusLabel.SetText(i18n.T("Ошибка выгрузки: ", "Upload error: ") + err.Error())
+				sp.showError(i18n.T("Ошибка выгрузки файла", "Upload Error"),
+					i18n.Tf("Не удалось выгрузить файл \"%s\":\n\n%s", "Failed to upload file \"%s\":\n\n%s", fileName, err.Error()))
 			}
 		})
 	}()
@@ -514,6 +518,8 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 					sp.StatusLabel.SetText(i18n.T("Скачивание завершено: ", "Download completed: ") + nameStr)
 				} else {
 					sp.StatusLabel.SetText(i18n.T("Ошибка скачивания: ", "Download error: ") + err.Error())
+					sp.showError(i18n.T("Ошибка загрузки файла", "Download Error"),
+						i18n.Tf("Не удалось скачать файл \"%s\":\n\n%s", "Failed to download file \"%s\":\n\n%s", nameStr, err.Error()))
 				}
 			})
 		}()
@@ -564,6 +570,8 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 				sp.LoadDirectory(sp.client.CurrentDir())
 			} else {
 				sp.StatusLabel.SetText(i18n.T("Ошибка создания папки: ", "Folder creation error: ") + err.Error())
+				sp.showError(i18n.T("Ошибка создания папки", "Folder Creation Error"),
+					i18n.Tf("Не удалось создать папку \"%s\":\n\n%s", "Failed to create folder \"%s\":\n\n%s", folderName, err.Error()))
 			}
 		}
 	}
@@ -616,6 +624,8 @@ func (sp *SFTPPanel) showRenameDialog(oldName string) {
 				sp.LoadDirectory(sp.client.CurrentDir())
 			} else {
 				sp.StatusLabel.SetText(i18n.T("Ошибка переименования: ", "Rename error: ") + err.Error())
+				sp.showError(i18n.T("Ошибка переименования", "Rename Error"),
+					i18n.Tf("Не удалось переименовать \"%s\" в \"%s\":\n\n%s", "Failed to rename \"%s\" to \"%s\":\n\n%s", oldName, newName, err.Error()))
 			}
 		}
 	}
@@ -720,6 +730,8 @@ func (sp *SFTPPanel) deleteSelectedFiles() {
 			glib.IdleAdd(func() {
 				if errCount > 0 {
 					sp.StatusLabel.SetText(i18n.Tf("Ошибок при удалении: %d", "Errors while deleting: %d", errCount))
+					sp.showError(i18n.T("Ошибка удаления", "Deletion Error"),
+						i18n.Tf("При удалении элементов произошло ошибок: %d", "Errors while deleting items: %d", errCount))
 				} else {
 					sp.StatusLabel.SetText(i18n.T("Удаление завершено", "Deletion completed"))
 				}
@@ -902,4 +914,11 @@ func formatFileSize(size int64) string {
 		return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
 	}
 	return fmt.Sprintf("%.1f GB", float64(size)/(1024*1024*1024))
+}
+
+func (sp *SFTPPanel) showError(title, msg string) {
+	dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "%s", msg)
+	dlg.SetTitle(title)
+	dlg.Run()
+	dlg.Destroy()
 }

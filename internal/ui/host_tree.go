@@ -417,12 +417,24 @@ func (ht *HostTree) DeleteSelected() {
 
 	dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", confirmMsg)
 	if dlg.Run() == gtk.RESPONSE_YES {
+		var delErrors []string
 		for _, it := range validItems {
 			if it.Type == "host" {
-				_ = ht.store.DeleteHost(it.ID)
+				if err := ht.store.DeleteHost(it.ID); err != nil {
+					delErrors = append(delErrors, fmt.Sprintf("%s: %v", it.Name, err))
+				}
 			} else if it.Type == "group" {
-				_ = ht.store.DeleteGroup(it.ID)
+				if err := ht.store.DeleteGroup(it.ID); err != nil {
+					delErrors = append(delErrors, fmt.Sprintf("%s: %v", it.Name, err))
+				}
 			}
+		}
+		if len(delErrors) > 0 {
+			errMsg := i18n.Tf("Ошибки при удалении:\n\n%s", "Errors while deleting:\n\n%s", strings.Join(delErrors, "\n"))
+			errDlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "%s", errMsg)
+			errDlg.SetTitle(i18n.T("Ошибка удаления", "Deletion Error"))
+			errDlg.Run()
+			errDlg.Destroy()
 		}
 		ht.Reload()
 	}

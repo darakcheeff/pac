@@ -92,6 +92,10 @@ type TabView struct {
 	Notebook               *gtk.Notebook
 	items                  []*TabItem
 	lastActiveSession      *session.Session
+	plusContent            *gtk.Box
+	plusBtn                *gtk.Button
+	plusEventBox           *gtk.EventBox
+	hasPlusTab             bool
 	OnTabChanged           func(sess *session.Session)
 	OnTabClosed            func(sess *session.Session)
 	OnSplitRequested       func(sess *session.Session, vertical bool)
@@ -122,21 +126,7 @@ func NewTabView() (*TabView, error) {
 		items:    make([]*TabItem, 0),
 	}
 
-	btnNewTab, btnErr := gtk.ButtonNewFromIconName("list-add-symbolic", gtk.ICON_SIZE_BUTTON)
-	if btnErr == nil {
-		btnNewTab.SetRelief(gtk.RELIEF_NONE)
-		btnNewTab.SetTooltipText(i18n.T("Создать новую вкладку (Локальный терминал)", "Create new tab (Local Terminal)"))
-		btnNewTab.SetMarginEnd(2)
-		btnNewTab.SetMarginTop(1)
-		btnNewTab.SetMarginBottom(1)
-		btnNewTab.Connect("clicked", func() {
-			if tv.OnNewLocalTerminal != nil {
-				tv.OnNewLocalTerminal()
-			}
-		})
-		btnNewTab.Show()
-		nb.SetActionWidget(btnNewTab, gtk.PACK_END)
-	}
+	tv.initPlusTab()
 
 	nb.AddEvents(int(gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
 	nb.Connect("scroll-event", func(_ *gtk.Notebook, event *gdk.Event) bool {
@@ -144,6 +134,24 @@ func NewTabView() (*TabView, error) {
 	})
 
 	nb.Connect("switch-page", func(_ *gtk.Notebook, page *gtk.Widget, pageNum uint) {
+		if tv.plusContent != nil && tv.hasPlusTab {
+			plusIdx := tv.Notebook.PageNum(tv.plusContent)
+			if plusIdx >= 0 && int(pageNum) == plusIdx {
+				glib.IdleAdd(func() {
+					if len(tv.items) > 0 {
+						prev := plusIdx - 1
+						if prev >= 0 {
+							tv.Notebook.SetCurrentPage(prev)
+						}
+					}
+					if tv.OnNewLocalTerminal != nil {
+						tv.OnNewLocalTerminal()
+					}
+				})
+				return
+			}
+		}
+
 		item := tv.GetCurrentTab()
 		if item != nil {
 			if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
@@ -164,6 +172,55 @@ func NewTabView() (*TabView, error) {
 
 	return tv, nil
 }
+
+// initPlusTab creates the browser-style '+' new tab button that sits immediately to the right of open tabs
+func (tv *TabView) initPlusTab() {
+	plusBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	plusBox.SetHExpand(false)
+	plusBox.SetVExpand(false)
+
+	eventBox, _ := gtk.EventBoxNew()
+	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK))
+
+	btnPlus, _ := gtk.ButtonNewFromIconName("list-add-symbolic", gtk.ICON_SIZE_MENU)
+	btnPlus.SetRelief(gtk.RELIEF_NONE)
+	btnPlus.SetTooltipText(i18n.T("Создать новую вкладку (Локальный терминал)", "Create new tab (Local Terminal)"))
+	btnPlus.SetMarginStart(0)
+	btnPlus.SetMarginEnd(0)
+	btnPlus.SetMarginTop(0)
+	btnPlus.SetMarginBottom(0)
+
+	btnPlus.Connect("clicked", func() {
+		if tv.OnNewLocalTerminal != nil {
+			tv.OnNewLocalTerminal()
+		}
+	})
+
+	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		btnEvent := gdk.EventButtonNewFromEvent(event)
+		if btnEvent.Button() == gdk.BUTTON_PRIMARY {
+			if tv.OnNewLocalTerminal != nil {
+				tv.OnNewLocalTerminal()
+			}
+			return true
+		}
+		return false
+	})
+
+	eventBox.Add(btnPlus)
+	eventBox.ShowAll()
+
+	tv.plusContent = plusBox
+	tv.plusBtn = btnPlus
+	tv.plusEventBox = eventBox
+	tv.hasPlusTab = true
+
+	tv.Notebook.AppendPage(plusBox, eventBox)
+	tv.Notebook.SetTabReorderable(plusBox, false)
+	tv.Notebook.SetTabDetachable(plusBox, false)
+	tv.Notebook.SetMenuLabelText(plusBox, "")
+}
+
 
 // createPane constructs a TerminalPane with its search bar and event listeners
 func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Terminal) *TerminalPane {
@@ -265,7 +322,16 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	contentBox.PackStart(pane.Box, true, true, 0)
 	contentBox.ShowAll()
 
-	pageNum := tv.Notebook.AppendPage(contentBox, eventBox)
+	plusIdx := -1
+	if tv.plusContent != nil && tv.hasPlusTab {
+		plusIdx = tv.Notebook.PageNum(tv.plusContent)
+	}
+	var pageNum int
+	if plusIdx >= 0 {
+		pageNum = tv.Notebook.InsertPage(contentBox, eventBox, plusIdx)
+	} else {
+		pageNum = tv.Notebook.AppendPage(contentBox, eventBox)
+	}
 	tv.Notebook.SetTabReorderable(contentBox, true)
 	tv.items = append(tv.items, item)
 
@@ -302,12 +368,15 @@ func (tv *TabView) handleTabScroll(event *gdk.Event, checkY bool) bool {
 		return false
 	}
 
-	nPages := tv.Notebook.GetNPages()
+	nPages := len(tv.items)
 	if nPages <= 1 {
 		return false
 	}
 
 	curr := tv.Notebook.GetCurrentPage()
+	if curr >= nPages {
+		curr = 0
+	}
 	var dir int // -1 for previous, +1 for next
 
 	switch scrollEvent.Direction() {
@@ -570,7 +639,16 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 	contentBox.PackStart(pane.Box, true, true, 0)
 	contentBox.ShowAll()
 
-	_ = tv.Notebook.AppendPage(contentBox, eventBox)
+	plusIdx := -1
+	if tv.plusContent != nil && tv.hasPlusTab {
+		plusIdx = tv.Notebook.PageNum(tv.plusContent)
+	}
+	var pageNum int
+	if plusIdx >= 0 {
+		pageNum = tv.Notebook.InsertPage(contentBox, eventBox, plusIdx)
+	} else {
+		pageNum = tv.Notebook.AppendPage(contentBox, eventBox)
+	}
 	tv.Notebook.SetTabReorderable(contentBox, true)
 	tv.items = append(tv.items, item)
 
@@ -594,6 +672,10 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 		return false
 	})
 
+	tv.Notebook.SetCurrentPage(pageNum)
+	if pane.Terminal != nil {
+		pane.Terminal.GrabFocus()
+	}
 	return item, nil
 }
 

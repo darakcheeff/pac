@@ -440,7 +440,11 @@ func (app *AppWindow) setupSignals() {
 			Name:     name,
 			Icon:     "folder",
 		}
-		_ = app.store.SaveGroup(g)
+		if err := app.store.SaveGroup(g); err != nil {
+			app.ShowError(i18n.T("Ошибка создания папки", "Folder Creation Error"),
+				i18n.Tf("Не удалось сохранить папку \"%s\":\n\n%s", "Failed to save folder \"%s\":\n\n%s", name, err.Error()))
+			return
+		}
 		app.HostTree.Reload()
 	}
 
@@ -454,7 +458,11 @@ func (app *AppWindow) setupSignals() {
 			return
 		}
 		g.Name = name
-		_ = app.store.SaveGroup(g)
+		if err := app.store.SaveGroup(g); err != nil {
+			app.ShowError(i18n.T("Ошибка переименования папки", "Folder Rename Error"),
+				i18n.Tf("Не удалось переименовать папку \"%s\":\n\n%s", "Failed to rename folder \"%s\":\n\n%s", name, err.Error()))
+			return
+		}
 		app.HostTree.Reload()
 	}
 
@@ -468,7 +476,11 @@ func (app *AppWindow) setupSignals() {
 			return
 		}
 		h.Name = name
-		_ = app.store.SaveHost(h)
+		if err := app.store.SaveHost(h); err != nil {
+			app.ShowError(i18n.T("Ошибка переименования подключения", "Connection Rename Error"),
+				i18n.Tf("Не удалось переименовать подключение \"%s\":\n\n%s", "Failed to rename connection \"%s\":\n\n%s", name, err.Error()))
+			return
+		}
 		app.HostTree.Reload()
 	}
 
@@ -510,11 +522,15 @@ func (app *AppWindow) setupSignals() {
 		hosts, _, err := migration.ParseLegacyConfigFile(configPath)
 		if err != nil {
 			app.StatusLabel.SetText(i18n.T("Ошибка чтения конфигурации: ", "Configuration read error: ") + err.Error())
+			app.ShowError(i18n.T("Ошибка чтения конфигурации", "Configuration Read Error"),
+				i18n.Tf("Не удалось прочитать конфигурацию из \"%s\":\n\n%s", "Failed to read configuration from \"%s\":\n\n%s", configPath, err.Error()))
 			return
 		}
 
 		if len(hosts) == 0 {
 			app.StatusLabel.SetText(i18n.T("В конфигурационном файле не найдено подключений", "No connections found in configuration file"))
+			app.ShowError(i18n.T("Импорт конфигурации", "Configuration Import"),
+				i18n.T("В указанном файле не найдено подключений для импорта.", "No connections found to import in specified file."))
 			return
 		}
 
@@ -958,6 +974,8 @@ func (app *AppWindow) RestoreSavedSessions() {
 			glib.IdleAdd(func() {
 				if err != nil {
 					log.Printf("[RESTORE] ERROR starting session for %s: %v", savedState.Title, err)
+					app.ShowError(i18n.T("Ошибка восстановления сессии", "Session Restore Error"),
+						i18n.Tf("Не удалось восстановить сохраненную сессию \"%s\":\n\n%s", "Failed to restore saved session \"%s\":\n\n%s", savedState.Title, err.Error()))
 					return
 				}
 				sess.ID = savedState.ID
@@ -1360,4 +1378,12 @@ func (app *AppWindow) setupSessionDirectorySync(sess *session.Session, term *vte
 			}
 		})
 	}
+}
+
+// ShowError displays an explicit modal error dialog
+func (app *AppWindow) ShowError(title, msg string) {
+	dlg := gtk.MessageDialogNew(app.Window, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "%s", msg)
+	dlg.SetTitle(title)
+	dlg.Run()
+	dlg.Destroy()
 }

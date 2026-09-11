@@ -850,7 +850,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 
 		host.PortForwards = currentForwards
 
-		_ = store.SaveHost(host)
+		if err := store.SaveHost(host); err != nil {
+			errMsg := i18n.Tf("Не удалось сохранить хост \"%s\":\n\n%s", "Failed to save host \"%s\":\n\n%s", host.Name, err.Error())
+			errDlg := gtk.MessageDialogNew(parent, gtk.DIALOG_MODAL, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "%s", errMsg)
+			errDlg.SetTitle(i18n.T("Ошибка сохранения", "Save Error"))
+			errDlg.Run()
+			errDlg.Destroy()
+			dlg.Destroy()
+			return
+		}
 		if onSaved != nil {
 			onSaved(host)
 		}
