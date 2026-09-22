@@ -1321,6 +1321,12 @@ func (tv *TabView) showTerminalContextMenu(pane *TerminalPane, eventTime uint32)
 	})
 	menu.Append(mPaste)
 
+	mReset, _ := gtk.MenuItemNewWithLabel(i18n.T("Сбросить терминал (Reset)", "Reset terminal"))
+	mReset.Connect("activate", func() {
+		pane.Terminal.ResetTerminal()
+	})
+	menu.Append(mReset)
+
 	sep1, _ := gtk.SeparatorMenuItemNew()
 	menu.Append(sep1)
 

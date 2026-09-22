@@ -32,9 +32,22 @@ static void paste_clean_text(VteTerminal* term, GdkAtom selection) {
 
     gchar* text = gtk_clipboard_wait_for_text(clipboard);
     if (text) {
-        vte_terminal_feed_child(term, text, strlen(text));
+        GString* s = g_string_new(text);
+        g_string_replace(s, "\x1b[200~", "", 0);
+        g_string_replace(s, "\x1b[201~", "", 0);
+        g_string_replace(s, "^[[200~", "", 0);
+        g_string_replace(s, "^[[201~", "", 0);
+
+        vte_terminal_paste_text(term, s->str);
+        g_string_free(s, TRUE);
         g_free(text);
     }
+}
+
+static void reset_terminal_state(VteTerminal* term) {
+    vte_terminal_reset(term, TRUE, FALSE);
+    const char* reset_seq = "\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[0m\x0f";
+    vte_terminal_feed(term, reset_seq, strlen(reset_seq));
 }
 
 static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
@@ -74,7 +87,27 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
         return TRUE;
     }
 
-    // Pass all keys cleanly to VTE without client interception
+    // Ctrl+Shift+V or Shift+Insert: Paste from clipboard with native bracketed paste support
+    if (((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_v)) ||
+        ((event->state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_Insert || event->keyval == GDK_KEY_KP_Insert))) {
+        paste_clean_text(VTE_TERMINAL(widget), GDK_SELECTION_CLIPBOARD);
+        return TRUE;
+    }
+
+    // Ctrl+Shift+C: Copy selected text to clipboard
+    if ((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_C || event->keyval == GDK_KEY_c)) {
+        vte_terminal_copy_clipboard_format(VTE_TERMINAL(widget), VTE_FORMAT_TEXT);
+        return TRUE;
+    }
+
+    // Ctrl+Shift+R or Ctrl+Shift+K: Reset terminal state (clears stuck bracketed paste and mouse modes)
+    if ((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK) && 
+        (event->keyval == GDK_KEY_R || event->keyval == GDK_KEY_r || event->keyval == GDK_KEY_K || event->keyval == GDK_KEY_k)) {
+        reset_terminal_state(VTE_TERMINAL(widget));
+        return TRUE;
+    }
+
+    // Pass all other keys cleanly to VTE without client interception
     // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
     if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
         return FALSE;
@@ -606,6 +639,11 @@ func (t *Terminal) Reset(clearHistory bool) {
 		clear = C.TRUE
 	}
 	C.vte_terminal_reset(t.vteTerm, clear, clear)
+}
+
+// ResetTerminal clears terminal state and resets stuck bracketed paste and mouse tracking modes
+func (t *Terminal) ResetTerminal() {
+	C.reset_terminal_state(t.vteTerm)
 }
 
 // SearchSetPattern configures search regex
