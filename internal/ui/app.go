@@ -955,10 +955,14 @@ func (app *AppWindow) setupSignals() {
 	app.TabView.OnTabChanged = func(sess *session.Session) {
 		if sess != nil {
 			app.NotesPanel.LoadSessionNotes(sess)
-			if sess.SFTPClient != nil && sess.Host != nil {
-				app.SFTPPanel.AttachClient(sess.Host.ID, sess.SFTPClient, app.settings.DefaultEditor)
+			if sess.SFTPClient != nil {
+				hostID := ""
+				if sess.Host != nil {
+					hostID = sess.Host.ID
+				}
+				app.SFTPPanel.AttachClient(sess.ID, hostID, sess.SFTPClient, app.settings.DefaultEditor)
 			} else {
-				app.SFTPPanel.AttachClient("", nil, app.settings.DefaultEditor)
+				app.SFTPPanel.AttachClient("", "", nil, app.settings.DefaultEditor)
 			}
 			if sess.Host != nil {
 				app.StatusLabel.SetText(i18n.Tf("Сессия: %s (%s) | Протокол: %s", "Session: %s (%s) | Protocol: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
@@ -970,6 +974,7 @@ func (app *AppWindow) setupSignals() {
 		if sess != nil {
 			log.Printf("[APP] Tab closed: %s (ID=%s)", sess.Title, sess.ID)
 			app.manager.Unregister(sess.ID)
+			app.SFTPPanel.RemoveSession(sess.ID)
 			if app.settings.AutoRestoreSessions {
 				app.SaveAllSessionState()
 			}
@@ -1247,7 +1252,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			app.NotesPanel.LoadSessionNotes(sess)
 
 			if sess.SFTPClient != nil {
-				app.SFTPPanel.AttachClient(host.ID, sess.SFTPClient, app.settings.DefaultEditor)
+				app.SFTPPanel.AttachClient(sess.ID, host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 			}
 
 			app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
@@ -1370,7 +1375,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 				tabItem, _ := app.TabView.AddTab(sess, term)
 				app.NotesPanel.LoadSessionNotes(sess)
 				if sess.SFTPClient != nil {
-					app.SFTPPanel.AttachClient(hostCopy.ID, sess.SFTPClient, app.settings.DefaultEditor)
+					app.SFTPPanel.AttachClient(sess.ID, hostCopy.ID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
 
 				app.attachSessionExitHandler(sess, term, hostCopy, savedState.Title)
@@ -1648,7 +1653,7 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 						}
 
 						if newSess.SFTPClient != nil {
-							app.SFTPPanel.AttachClient(host.ID, newSess.SFTPClient, app.settings.DefaultEditor)
+							app.SFTPPanel.AttachClient(newSess.ID, host.ID, newSess.SFTPClient, app.settings.DefaultEditor)
 						}
 
 						app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
@@ -1748,10 +1753,19 @@ func (app *AppWindow) setupSessionDirectorySync(sess *session.Session, term *vte
 				activeSess = currTab.Session
 			}
 			if activeSess == sess {
-				if sess.Host != nil && app.SFTPPanel.currentHostID != sess.Host.ID && sess.SFTPClient != nil {
-					app.SFTPPanel.AttachClient(sess.Host.ID, sess.SFTPClient, app.settings.DefaultEditor)
+				hostID := ""
+				if sess.Host != nil {
+					hostID = sess.Host.ID
+				}
+				if app.SFTPPanel.GetCurrentSessionID() != sess.ID && sess.SFTPClient != nil {
+					app.SFTPPanel.AttachClient(sess.ID, hostID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
 				app.SFTPPanel.LoadDirectory(path)
+			} else {
+				if sess.SFTPClient != nil {
+					sess.SFTPClient.SetCurrentDir(path)
+					app.SFTPPanel.InvalidateSessionCache(sess.ID, path)
+				}
 			}
 		})
 	}

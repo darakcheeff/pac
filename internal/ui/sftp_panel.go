@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"context"
 	"sync"
+	"sync/atomic"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,30 @@ const (
 )
 
 // SFTPPanel represents the MobaXterm-style SFTP file browser panel
+// SessionTransferState tracks an ongoing transfer for a specific session
+type SessionTransferState struct {
+	IsTransferring  bool
+	TransferType    string // "upload", "download", "download_multi"
+	FileName        string
+	Fraction        float64
+	Speed           float64
+	StatusText      string
+	CancelFunc      context.CancelFunc
+	uiUpdatePending int32
+}
+
+// SessionSFTPData maintains isolated SFTP browsing state per tab session
+type SessionSFTPData struct {
+	Client      *sftp.Client
+	HostID      string
+	CurrentPath string
+	Items       []sftp.FileItem
+	Transfer    SessionTransferState
+	LastStatus  string
+	IsLoading   bool
+}
+
+// SFTPPanel represents the MobaXterm-style SFTP file browser panel
 type SFTPPanel struct {
 	Box           *gtk.Box
 	PathEntry     *gtk.Entry
@@ -40,9 +65,10 @@ type SFTPPanel struct {
 	client        *sftp.Client
 	watcherMgr    *watcher.RemoteEditManager
 	currentHostID string
+	currentSessID string
 	editorPref    string
-	isLoading     bool
-	loadMu        sync.Mutex
+	sessions      map[string]*SessionSFTPData
+	sessMu        sync.Mutex
 }
 
 func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
@@ -159,6 +185,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		UploadBtn:   uploadBtn,
 		DownloadBtn: downloadBtn,
 		watcherMgr:  watcherMgr,
+		sessions:    make(map[string]*SessionSFTPData),
 	}
 
 	// Setup Drag and Drop: internal moving into folders + external upload from desktop/file manager
@@ -359,107 +386,316 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	return panel, nil
 }
 
-// AttachClient attaches active SFTP client for a session
-func (sp *SFTPPanel) AttachClient(hostID string, client *sftp.Client, editorPref string) {
-	if sp.client == client && sp.currentHostID == hostID {
+func (sp *SFTPPanel) populateStore(items []sftp.FileItem) {
+	sp.TreeView.SetModel(nil)
+	sp.ListStore.Clear()
+
+	for _, item := range items {
+		iter := sp.ListStore.Append()
+		icon := "text-x-generic"
+		sizeStr := formatFileSize(item.Size)
+		if item.IsDir {
+			icon = "folder"
+			sizeStr = "<DIR>"
+		}
+
+		_ = sp.ListStore.SetValue(iter, SFTPColName, item.Name)
+		_ = sp.ListStore.SetValue(iter, SFTPColSize, sizeStr)
+		_ = sp.ListStore.SetValue(iter, SFTPColTime, item.ModTime.Format("2006-01-02 15:04"))
+		_ = sp.ListStore.SetValue(iter, SFTPColMode, item.Mode.String())
+		_ = sp.ListStore.SetValue(iter, SFTPColIsDir, item.IsDir)
+		_ = sp.ListStore.SetValue(iter, SFTPColIcon, icon)
+	}
+
+	sp.TreeView.SetModel(sp.ListStore)
+}
+
+// AttachClient attaches active SFTP client for a specific tab session
+func (sp *SFTPPanel) AttachClient(sessionID, hostID string, client *sftp.Client, editorPref string) {
+	sp.sessMu.Lock()
+	defer sp.sessMu.Unlock()
+
+	if sp.client == client && sp.currentSessID == sessionID && sp.currentHostID == hostID {
 		sp.editorPref = editorPref
 		return
 	}
+
+	sp.currentSessID = sessionID
 	sp.currentHostID = hostID
 	sp.client = client
 	sp.editorPref = editorPref
-	if client != nil {
-		sp.LoadDirectory(client.CurrentDir())
-	} else {
+
+	if client == nil || sessionID == "" {
+		sp.TreeView.SetModel(nil)
 		sp.ListStore.Clear()
+		sp.TreeView.SetModel(sp.ListStore)
 		sp.PathEntry.SetText("")
+		sp.ProgressBar.SetFraction(0.0)
+		sp.StatusLabel.SetText(i18n.T("Готово", "Ready"))
+		return
+	}
+
+	sData, exists := sp.sessions[sessionID]
+	if !exists {
+		sData = &SessionSFTPData{
+			Client: client,
+			HostID: hostID,
+		}
+		sp.sessions[sessionID] = sData
+	} else {
+		sData.Client = client
+		sData.HostID = hostID
+	}
+
+	currentPath := sData.CurrentPath
+	if currentPath == "" {
+		currentPath = client.CurrentDir()
+		sData.CurrentPath = currentPath
+	}
+	sp.PathEntry.SetText(currentPath)
+
+	if sData.Transfer.IsTransferring {
+		sp.ProgressBar.SetFraction(sData.Transfer.Fraction)
+		sp.StatusLabel.SetText(sData.Transfer.StatusText)
+	} else {
+		sp.ProgressBar.SetFraction(0.0)
+		if sData.LastStatus != "" {
+			sp.StatusLabel.SetText(sData.LastStatus)
+		} else if len(sData.Items) > 0 {
+			sp.StatusLabel.SetText(i18n.Tf("Элементов: %d", "Items: %d", len(sData.Items)))
+		} else {
+			sp.StatusLabel.SetText(i18n.T("Готово", "Ready"))
+		}
+	}
+
+	if sData.Items != nil {
+		sp.populateStore(sData.Items)
+	} else {
+		go sp.loadDirectoryInternal(sessionID, client, currentPath)
 	}
 }
 
-// LoadDirectory loads remote file list into TreeView
-func (sp *SFTPPanel) LoadDirectory(path string) {
-	if sp.client == nil {
-		return
-	}
+// GetCurrentSessionID returns the currently displayed session ID
+func (sp *SFTPPanel) GetCurrentSessionID() string {
+	sp.sessMu.Lock()
+	defer sp.sessMu.Unlock()
+	return sp.currentSessID
+}
 
-	sp.loadMu.Lock()
-	if sp.isLoading {
-		sp.loadMu.Unlock()
-		return
+// RemoveSession cleans up state and cancels active transfers when a tab is closed
+func (sp *SFTPPanel) RemoveSession(sessionID string) {
+	sp.sessMu.Lock()
+	if sData, ok := sp.sessions[sessionID]; ok {
+		if sData.Transfer.CancelFunc != nil {
+			sData.Transfer.CancelFunc()
+		}
+		delete(sp.sessions, sessionID)
 	}
-	sp.isLoading = true
-	sp.loadMu.Unlock()
+	wasCurrent := (sp.currentSessID == sessionID)
+	if wasCurrent {
+		sp.currentSessID = ""
+		sp.client = nil
+	}
+	sp.sessMu.Unlock()
 
-	sp.StatusLabel.SetText(i18n.T("Загрузка каталога...", "Loading directory..."))
-	go func() {
-		items, err := sp.client.ListDir(path)
+	if wasCurrent {
 		glib.IdleAdd(func() {
-			sp.loadMu.Lock()
-			sp.isLoading = false
-			sp.loadMu.Unlock()
-
-			if err != nil {
-				sp.StatusLabel.SetText(i18n.T("Ошибка: ", "Error: ") + err.Error())
-				sp.showError(i18n.T("Ошибка каталога", "Directory Error"),
-					i18n.Tf("Не удалось загрузить каталог \"%s\":\n\n%s", "Failed to load directory \"%s\":\n\n%s", path, err.Error()))
-				return
-			}
-
-			sp.client.SetCurrentDir(path)
-			sp.PathEntry.SetText(path)
+			sp.TreeView.SetModel(nil)
 			sp.ListStore.Clear()
-
-			for _, item := range items {
-				iter := sp.ListStore.Append()
-				icon := "text-x-generic"
-				sizeStr := formatFileSize(item.Size)
-				if item.IsDir {
-					icon = "folder"
-					sizeStr = "<DIR>"
-				}
-
-				_ = sp.ListStore.SetValue(iter, SFTPColName, item.Name)
-				_ = sp.ListStore.SetValue(iter, SFTPColSize, sizeStr)
-				_ = sp.ListStore.SetValue(iter, SFTPColTime, item.ModTime.Format("2006-01-02 15:04"))
-				_ = sp.ListStore.SetValue(iter, SFTPColMode, item.Mode.String())
-				_ = sp.ListStore.SetValue(iter, SFTPColIsDir, item.IsDir)
-				_ = sp.ListStore.SetValue(iter, SFTPColIcon, icon)
-			}
-
-			sp.StatusLabel.SetText(i18n.Tf("Элементов: %d", "Items: %d", len(items)))
+			sp.TreeView.SetModel(sp.ListStore)
+			sp.PathEntry.SetText("")
+			sp.ProgressBar.SetFraction(0.0)
+			sp.StatusLabel.SetText(i18n.T("Готово", "Ready"))
 		})
-	}()
+	}
+}
+
+// InvalidateSessionCache invalidates cached file listing for a session (e.g. when cd in background)
+func (sp *SFTPPanel) InvalidateSessionCache(sessionID string, newPath string) {
+	sp.sessMu.Lock()
+	defer sp.sessMu.Unlock()
+
+	if sData, ok := sp.sessions[sessionID]; ok {
+		sData.CurrentPath = newPath
+		sData.Items = nil
+	}
+}
+
+// LoadDirectory loads remote file list for currently active session
+func (sp *SFTPPanel) LoadDirectory(path string) {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	client := sp.client
+	sp.sessMu.Unlock()
+
+	if client == nil || sessionID == "" {
+		return
+	}
+	go sp.loadDirectoryInternal(sessionID, client, path)
+}
+
+func (sp *SFTPPanel) loadDirectoryInternal(sessionID string, client *sftp.Client, path string) {
+	sp.sessMu.Lock()
+	sData, ok := sp.sessions[sessionID]
+	if !ok {
+		sData = &SessionSFTPData{Client: client}
+		sp.sessions[sessionID] = sData
+	}
+	if sData.IsLoading {
+		sp.sessMu.Unlock()
+		return
+	}
+	sData.IsLoading = true
+	isCurrent := (sp.currentSessID == sessionID)
+	sp.sessMu.Unlock()
+
+	if isCurrent {
+		glib.IdleAdd(func() {
+			sp.sessMu.Lock()
+			curr := (sp.currentSessID == sessionID)
+			sp.sessMu.Unlock()
+			if curr {
+				sp.StatusLabel.SetText(i18n.T("Загрузка каталога...", "Loading directory..."))
+			}
+		})
+	}
+
+	items, err := client.ListDir(path)
+
+	sp.sessMu.Lock()
+	if sd, ok := sp.sessions[sessionID]; ok {
+		sd.IsLoading = false
+		if err == nil {
+			sd.Items = items
+			sd.CurrentPath = path
+			client.SetCurrentDir(path)
+		}
+	}
+	sp.sessMu.Unlock()
+
+	glib.IdleAdd(func() {
+		sp.sessMu.Lock()
+		isStillCurrent := (sp.currentSessID == sessionID && sp.client == client)
+		sp.sessMu.Unlock()
+
+		if !isStillCurrent {
+			return
+		}
+
+		if err != nil {
+			sp.StatusLabel.SetText(i18n.T("Ошибка: ", "Error: ") + err.Error())
+			sp.showError(i18n.T("Ошибка каталога", "Directory Error"),
+				i18n.Tf("Не удалось загрузить каталог \"%s\":\n\n%s", "Failed to load directory \"%s\":\n\n%s", path, err.Error()))
+			return
+		}
+
+		sp.PathEntry.SetText(path)
+		sp.populateStore(items)
+		sp.StatusLabel.SetText(i18n.Tf("Элементов: %d", "Items: %d", len(items)))
+	})
 }
 
 // UploadLocalFile uploads local file to current remote directory with progress
 func (sp *SFTPPanel) UploadLocalFile(localPath string) {
-	if sp.client == nil {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	client := sp.client
+	sData := sp.sessions[sessionID]
+	if client == nil || sessionID == "" || sData == nil {
+		sp.sessMu.Unlock()
 		return
 	}
+	if sData.Transfer.IsTransferring {
+		sp.sessMu.Unlock()
+		sp.showError(i18n.T("Передача уже выполняется", "Transfer already in progress"),
+			i18n.T("Пожалуйста, дождитесь окончания текущей передачи файлов в этой сессии.", "Please wait for the current file transfer in this session to complete."))
+		return
+	}
+
 	fileName := filepath.Base(localPath)
-	remoteDest := filepath.Join(sp.client.CurrentDir(), fileName)
+	remoteDest := filepath.Join(client.CurrentDir(), fileName)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sData.Transfer = SessionTransferState{
+		IsTransferring: true,
+		TransferType:   "upload",
+		FileName:       fileName,
+		Fraction:       0.0,
+		StatusText:     i18n.T("Выгрузка: ", "Uploading: ") + fileName,
+		CancelFunc:     cancel,
+	}
+	sp.sessMu.Unlock()
 
 	sp.StatusLabel.SetText(i18n.T("Выгрузка: ", "Uploading: ") + fileName)
 	sp.ProgressBar.SetFraction(0.0)
 
 	go func() {
-		err := sp.client.UploadFile(context.Background(), localPath, remoteDest, func(transferred, total int64, speed float64) {
-			if total > 0 {
-				fraction := float64(transferred) / float64(total)
+		err := client.UploadFile(ctx, localPath, remoteDest, func(transferred, total int64, speed float64) {
+			if total <= 0 {
+				return
+			}
+			fraction := float64(transferred) / float64(total)
+			speedStr := formatFileSize(int64(speed)) + "/s"
+			statusText := fmt.Sprintf("%s %s (%.0f%%, %s)",
+				i18n.T("Выгрузка: ", "Uploading: "),
+				fileName,
+				fraction*100,
+				speedStr,
+			)
+
+			sp.sessMu.Lock()
+			if sd, ok := sp.sessions[sessionID]; ok {
+				sd.Transfer.Fraction = fraction
+				sd.Transfer.StatusText = statusText
+			}
+			sp.sessMu.Unlock()
+
+			if atomic.CompareAndSwapInt32(&sData.Transfer.uiUpdatePending, 0, 1) {
 				glib.IdleAdd(func() {
-					sp.ProgressBar.SetFraction(fraction)
+					atomic.StoreInt32(&sData.Transfer.uiUpdatePending, 0)
+					sp.sessMu.Lock()
+					isCurrent := (sp.currentSessID == sessionID)
+					sp.sessMu.Unlock()
+					if isCurrent {
+						sp.ProgressBar.SetFraction(fraction)
+						sp.StatusLabel.SetText(statusText)
+					}
 				})
 			}
 		})
+
 		glib.IdleAdd(func() {
-			sp.ProgressBar.SetFraction(0.0)
+			var finalStatus string
 			if err == nil {
-				sp.StatusLabel.SetText(i18n.T("Выгрузка завершена: ", "Upload completed: ") + fileName)
-				sp.LoadDirectory(sp.client.CurrentDir())
+				finalStatus = i18n.T("Выгрузка завершена: ", "Upload completed: ") + fileName
+			} else if err == context.Canceled {
+				finalStatus = i18n.T("Выгрузка отменена: ", "Upload canceled: ") + fileName
 			} else {
-				sp.StatusLabel.SetText(i18n.T("Ошибка выгрузки: ", "Upload error: ") + err.Error())
-				sp.showError(i18n.T("Ошибка выгрузки файла", "Upload Error"),
-					i18n.Tf("Не удалось выгрузить файл \"%s\":\n\n%s", "Failed to upload file \"%s\":\n\n%s", fileName, err.Error()))
+				finalStatus = i18n.T("Ошибка выгрузки: ", "Upload error: ") + err.Error()
+			}
+
+			sp.sessMu.Lock()
+			if sd, ok := sp.sessions[sessionID]; ok {
+				sd.Transfer.IsTransferring = false
+				sd.Transfer.Fraction = 0.0
+				sd.Transfer.StatusText = ""
+				sd.Transfer.CancelFunc = nil
+				sd.LastStatus = finalStatus
+			}
+			isCurrent := (sp.currentSessID == sessionID)
+			sp.sessMu.Unlock()
+
+			if isCurrent {
+				sp.ProgressBar.SetFraction(0.0)
+				sp.StatusLabel.SetText(finalStatus)
+				if err == nil {
+					sp.LoadDirectory(client.CurrentDir())
+				} else if err != context.Canceled {
+					sp.showError(i18n.T("Ошибка выгрузки файла", "Upload Error"),
+						i18n.Tf("Не удалось выгрузить файл \"%s\":\n\n%s", "Failed to upload file \"%s\":\n\n%s", fileName, err.Error()))
+				}
+			} else if err == nil {
+				go sp.loadDirectoryInternal(sessionID, client, client.CurrentDir())
 			}
 		})
 	}()
@@ -486,12 +722,24 @@ func (sp *SFTPPanel) showUploadFileChooser() {
 }
 
 func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
-	if sp.client == nil {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	client := sp.client
+	sData := sp.sessions[sessionID]
+	sp.sessMu.Unlock()
+
+	if client == nil || sessionID == "" || sData == nil {
 		return
 	}
+	if sData.Transfer.IsTransferring {
+		sp.showError(i18n.T("Передача уже выполняется", "Transfer already in progress"),
+			i18n.T("Пожалуйста, дождитесь окончания текущей передачи файлов в этой сессии.", "Please wait for the current file transfer in this session to complete."))
+		return
+	}
+
 	valName, _ := sp.ListStore.GetValue(iter, SFTPColName)
 	nameStr, _ := valName.GetString()
-	remotePath := filepath.Join(sp.client.CurrentDir(), nameStr)
+	remotePath := filepath.Join(client.CurrentDir(), nameStr)
 
 	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
 		i18n.T("Сохранить файл на локальный компьютер", "Save file to local computer"),
@@ -505,31 +753,92 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 
 	if dlg.Run() == gtk.RESPONSE_ACCEPT {
 		localPath := dlg.GetFilename()
+		dlg.Destroy()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		sp.sessMu.Lock()
+		sData.Transfer = SessionTransferState{
+			IsTransferring: true,
+			TransferType:   "download",
+			FileName:       nameStr,
+			Fraction:       0.0,
+			StatusText:     i18n.T("Скачивание: ", "Downloading: ") + nameStr,
+			CancelFunc:     cancel,
+		}
+		sp.sessMu.Unlock()
+
 		sp.StatusLabel.SetText(i18n.T("Скачивание: ", "Downloading: ") + nameStr)
 		sp.ProgressBar.SetFraction(0.0)
 
 		go func() {
-			err := sp.client.DownloadFile(context.Background(), remotePath, localPath, func(transferred, total int64, speed float64) {
-				if total > 0 {
-					fraction := float64(transferred) / float64(total)
+			err := client.DownloadFile(ctx, remotePath, localPath, func(transferred, total int64, speed float64) {
+				if total <= 0 {
+					return
+				}
+				fraction := float64(transferred) / float64(total)
+				speedStr := formatFileSize(int64(speed)) + "/s"
+				statusText := fmt.Sprintf("%s %s (%.0f%%, %s)",
+					i18n.T("Скачивание: ", "Downloading: "),
+					nameStr,
+					fraction*100,
+					speedStr,
+				)
+
+				sp.sessMu.Lock()
+				if sd, ok := sp.sessions[sessionID]; ok {
+					sd.Transfer.Fraction = fraction
+					sd.Transfer.StatusText = statusText
+				}
+				sp.sessMu.Unlock()
+
+				if atomic.CompareAndSwapInt32(&sData.Transfer.uiUpdatePending, 0, 1) {
 					glib.IdleAdd(func() {
-						sp.ProgressBar.SetFraction(fraction)
+						atomic.StoreInt32(&sData.Transfer.uiUpdatePending, 0)
+						sp.sessMu.Lock()
+						isCurrent := (sp.currentSessID == sessionID)
+						sp.sessMu.Unlock()
+						if isCurrent {
+							sp.ProgressBar.SetFraction(fraction)
+							sp.StatusLabel.SetText(statusText)
+						}
 					})
 				}
 			})
+
 			glib.IdleAdd(func() {
-				sp.ProgressBar.SetFraction(0.0)
+				var finalStatus string
 				if err == nil {
-					sp.StatusLabel.SetText(i18n.T("Скачивание завершено: ", "Download completed: ") + nameStr)
+					finalStatus = i18n.T("Скачивание завершено: ", "Download completed: ") + nameStr
+				} else if err == context.Canceled {
+					finalStatus = i18n.T("Скачивание отменено: ", "Download canceled: ") + nameStr
 				} else {
-					sp.StatusLabel.SetText(i18n.T("Ошибка скачивания: ", "Download error: ") + err.Error())
-					sp.showError(i18n.T("Ошибка загрузки файла", "Download Error"),
-						i18n.Tf("Не удалось скачать файл \"%s\":\n\n%s", "Failed to download file \"%s\":\n\n%s", nameStr, err.Error()))
+					finalStatus = i18n.T("Ошибка скачивания: ", "Download error: ") + err.Error()
+				}
+
+				sp.sessMu.Lock()
+				if sd, ok := sp.sessions[sessionID]; ok {
+					sd.Transfer.IsTransferring = false
+					sd.Transfer.Fraction = 0.0
+					sd.Transfer.StatusText = ""
+					sd.Transfer.CancelFunc = nil
+					sd.LastStatus = finalStatus
+				}
+				isCurrent := (sp.currentSessID == sessionID)
+				sp.sessMu.Unlock()
+
+				if isCurrent {
+					sp.ProgressBar.SetFraction(0.0)
+					sp.StatusLabel.SetText(finalStatus)
+					if err != nil && err != context.Canceled {
+						sp.showError(i18n.T("Ошибка загрузки файла", "Download Error"),
+							i18n.Tf("Не удалось скачать файл \"%s\":\n\n%s", "Failed to download file \"%s\":\n\n%s", nameStr, err.Error()))
+					}
 				}
 			})
 		}()
+	} else {
+		dlg.Destroy()
 	}
-	dlg.Destroy()
 }
 
 func (sp *SFTPPanel) showCreateFolderDialog() {
@@ -638,7 +947,12 @@ func (sp *SFTPPanel) showRenameDialog(oldName string) {
 }
 
 func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
-	if sp.client == nil || sp.watcherMgr == nil {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	hostID := sp.currentHostID
+	sp.sessMu.Unlock()
+
+	if sp.client == nil || sp.watcherMgr == nil || sessionID == "" {
 		return
 	}
 
@@ -649,20 +963,30 @@ func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
 
 	uploadFn := func(ctx context.Context, localPath, remPath string) error {
 		glib.IdleAdd(func() {
-			sp.StatusLabel.SetText(i18n.T("Сохранение на сервер: ", "Saving to server: ") + filepath.Base(remPath))
+			sp.sessMu.Lock()
+			isCurrent := (sp.currentSessID == sessionID)
+			sp.sessMu.Unlock()
+			if isCurrent {
+				sp.StatusLabel.SetText(i18n.T("Сохранение на сервер: ", "Saving to server: ") + filepath.Base(remPath))
+			}
 		})
 		err := sp.client.UploadFile(ctx, localPath, remPath, nil)
 		glib.IdleAdd(func() {
-			if err == nil {
-				sp.StatusLabel.SetText(i18n.T("Файл сохранен: ", "File saved: ") + filepath.Base(remPath))
-			} else {
-				sp.StatusLabel.SetText(i18n.T("Ошибка сохранения: ", "Save error: ") + err.Error())
+			sp.sessMu.Lock()
+			isCurrent := (sp.currentSessID == sessionID)
+			sp.sessMu.Unlock()
+			if isCurrent {
+				if err == nil {
+					sp.StatusLabel.SetText(i18n.T("Файл сохранен: ", "File saved: ") + filepath.Base(remPath))
+				} else {
+					sp.StatusLabel.SetText(i18n.T("Ошибка сохранения: ", "Save error: ") + err.Error())
+				}
 			}
 		})
 		return err
 	}
 
-	_ = sp.watcherMgr.OpenForEditing(sp.currentHostID, remotePath, downloadFn, uploadFn, sp.editorPref)
+	_ = sp.watcherMgr.OpenForEditing(hostID, remotePath, downloadFn, uploadFn, sp.editorPref)
 }
 
 type sftpSelectedFile struct {
@@ -706,7 +1030,12 @@ func (sp *SFTPPanel) renameSelectedFile() {
 }
 
 func (sp *SFTPPanel) deleteSelectedFiles() {
-	if sp.client == nil {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	client := sp.client
+	sp.sessMu.Unlock()
+
+	if client == nil || sessionID == "" {
 		return
 	}
 	files := sp.getSelectedFiles()
@@ -728,19 +1057,27 @@ func (sp *SFTPPanel) deleteSelectedFiles() {
 		go func() {
 			var errCount int
 			for _, f := range files {
-				if err := sp.client.Remove(f.path); err != nil {
+				if err := client.Remove(f.path); err != nil {
 					errCount++
 				}
 			}
 			glib.IdleAdd(func() {
-				if errCount > 0 {
-					sp.StatusLabel.SetText(i18n.Tf("Ошибок при удалении: %d", "Errors while deleting: %d", errCount))
-					sp.showError(i18n.T("Ошибка удаления", "Deletion Error"),
-						i18n.Tf("При удалении элементов произошло ошибок: %d", "Errors while deleting items: %d", errCount))
+				sp.sessMu.Lock()
+				isCurrent := (sp.currentSessID == sessionID)
+				sp.sessMu.Unlock()
+
+				if isCurrent {
+					if errCount > 0 {
+						sp.StatusLabel.SetText(i18n.Tf("Ошибок при удалении: %d", "Errors while deleting: %d", errCount))
+						sp.showError(i18n.T("Ошибка удаления", "Deletion Error"),
+							i18n.Tf("При удалении элементов произошло ошибок: %d", "Errors while deleting items: %d", errCount))
+					} else {
+						sp.StatusLabel.SetText(i18n.T("Удаление завершено", "Deletion completed"))
+					}
+					sp.LoadDirectory(client.CurrentDir())
 				} else {
-					sp.StatusLabel.SetText(i18n.T("Удаление завершено", "Deletion completed"))
+					go sp.loadDirectoryInternal(sessionID, client, client.CurrentDir())
 				}
-				sp.LoadDirectory(sp.client.CurrentDir())
 			})
 		}()
 	} else {
@@ -749,9 +1086,21 @@ func (sp *SFTPPanel) deleteSelectedFiles() {
 }
 
 func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
-	if sp.client == nil || len(files) == 0 {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	client := sp.client
+	sData := sp.sessions[sessionID]
+	sp.sessMu.Unlock()
+
+	if client == nil || len(files) == 0 || sessionID == "" || sData == nil {
 		return
 	}
+	if sData.Transfer.IsTransferring {
+		sp.showError(i18n.T("Передача уже выполняется", "Transfer already in progress"),
+			i18n.T("Пожалуйста, дождитесь окончания текущей передачи файлов в этой сессии.", "Please wait for the current file transfer in this session to complete."))
+		return
+	}
+
 	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
 		i18n.T("Выберите папку для сохранения файлов", "Select destination folder to save files"),
 		nil,
@@ -761,24 +1110,83 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 	)
 	if dlg.Run() == gtk.RESPONSE_ACCEPT {
 		targetDir := dlg.GetFilename()
+		dlg.Destroy()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		sp.sessMu.Lock()
+		sData.Transfer = SessionTransferState{
+			IsTransferring: true,
+			TransferType:   "download_multi",
+			FileName:       fmt.Sprintf("%d files", len(files)),
+			Fraction:       0.0,
+			StatusText:     i18n.T("Скачивание файлов...", "Downloading files..."),
+			CancelFunc:     cancel,
+		}
+		sp.sessMu.Unlock()
+
 		sp.StatusLabel.SetText(i18n.T("Скачивание файлов...", "Downloading files..."))
+		sp.ProgressBar.SetFraction(0.0)
+
 		go func() {
+			var nonDirFiles []sftpSelectedFile
 			for _, f := range files {
-				if f.isDir {
-					continue
+				if !f.isDir {
+					nonDirFiles = append(nonDirFiles, f)
+				}
+			}
+			totalCount := len(nonDirFiles)
+			for i, f := range nonDirFiles {
+				select {
+				case <-ctx.Done():
+					break
+				default:
 				}
 				localDest := filepath.Join(targetDir, f.name)
+				statusText := fmt.Sprintf("%s (%d/%d): %s",
+					i18n.T("Скачивание: ", "Downloading: "),
+					i+1, totalCount, f.name)
+
+				sp.sessMu.Lock()
+				if sd, ok := sp.sessions[sessionID]; ok {
+					sd.Transfer.Fraction = float64(i) / float64(totalCount)
+					sd.Transfer.StatusText = statusText
+				}
+				sp.sessMu.Unlock()
+
 				glib.IdleAdd(func() {
-				sp.StatusLabel.SetText(i18n.T("Скачивание: ", "Downloading: ") + f.name)
+					sp.sessMu.Lock()
+					isCurrent := (sp.currentSessID == sessionID)
+					sp.sessMu.Unlock()
+					if isCurrent {
+						sp.ProgressBar.SetFraction(float64(i) / float64(totalCount))
+						sp.StatusLabel.SetText(statusText)
+					}
 				})
-				_ = sp.client.DownloadFile(context.Background(), f.path, localDest, nil)
+
+				_ = client.DownloadFile(ctx, f.path, localDest, nil)
 			}
+
 			glib.IdleAdd(func() {
-				sp.StatusLabel.SetText(i18n.T("Скачивание завершено", "Download completed"))
+				sp.sessMu.Lock()
+				if sd, ok := sp.sessions[sessionID]; ok {
+					sd.Transfer.IsTransferring = false
+					sd.Transfer.Fraction = 0.0
+					sd.Transfer.StatusText = ""
+					sd.Transfer.CancelFunc = nil
+					sd.LastStatus = i18n.T("Скачивание завершено", "Download completed")
+				}
+				isCurrent := (sp.currentSessID == sessionID)
+				sp.sessMu.Unlock()
+
+				if isCurrent {
+					sp.ProgressBar.SetFraction(0.0)
+					sp.StatusLabel.SetText(i18n.T("Скачивание завершено", "Download completed"))
+				}
 			})
 		}()
+	} else {
+		dlg.Destroy()
 	}
-	dlg.Destroy()
 }
 
 func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {

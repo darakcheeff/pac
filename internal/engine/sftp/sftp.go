@@ -352,6 +352,7 @@ func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, totalSi
 	buf := make([]byte, 64*1024)
 	var transferred int64
 	startTime := time.Now()
+	lastCbTime := time.Now()
 
 	for {
 		select {
@@ -368,6 +369,21 @@ func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, totalSi
 			transferred += int64(n)
 
 			if cb != nil {
+				now := time.Now()
+				if now.Sub(lastCbTime) >= 100*time.Millisecond || (totalSize > 0 && transferred >= totalSize) {
+					lastCbTime = now
+					elapsed := now.Sub(startTime).Seconds()
+					var speed float64
+					if elapsed > 0 {
+						speed = float64(transferred) / elapsed
+					}
+					cb(transferred, totalSize, speed)
+				}
+			}
+		}
+
+		if err == io.EOF {
+			if cb != nil && totalSize > 0 && transferred > 0 {
 				elapsed := time.Since(startTime).Seconds()
 				var speed float64
 				if elapsed > 0 {
@@ -375,9 +391,6 @@ func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, totalSi
 				}
 				cb(transferred, totalSize, speed)
 			}
-		}
-
-		if err == io.EOF {
 			break
 		}
 		if err != nil {
