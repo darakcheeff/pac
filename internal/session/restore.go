@@ -2,6 +2,7 @@ package session
 
 import (
 	"crypto/sha256"
+	"strings" 
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -35,10 +36,7 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 			protocol = s.Host.Protocol
 		}
 
-		scrollback := s.GetScrollbackText()
-		if len(scrollback) > 50*1024 {
-			scrollback = scrollback[len(scrollback)-50*1024:]
-		}
+		scrollback := CleanScrollbackDump(s.GetScrollbackText())
 
 		workingDir := "/"
 		if s.SFTPClient != nil {
@@ -88,4 +86,46 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 func FormatRestoredHistoryHeader(savedAt time.Time) string {
 	return i18n.Tf("\r\n\x1b[1;33m--- [Восстановленная история сессии: %s] ---\x1b[0m\r\n\r\n", "\r\n\x1b[1;33m--- [Restored session history: %s] ---\x1b[0m\r\n\r\n",
 		savedAt.Format("2006-01-02 15:04:05"))
+}
+
+
+// CleanScrollbackDump strips escape sequences, normalizes line breaks, and limits history size
+func CleanScrollbackDump(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	clean := ansiRegex.ReplaceAllString(raw, "")
+	clean = strings.ReplaceAll(clean, "\r\n", "\n")
+	clean = strings.ReplaceAll(clean, "\r", "\n")
+	clean = strings.TrimRight(clean, "\n ")
+	if clean == "" {
+		return ""
+	}
+
+	lines := strings.Split(clean, "\n")
+	const maxLines = 1000
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	res := strings.Join(lines, "\n")
+	const maxBytes = 50 * 1024
+	if len(res) > maxBytes {
+		res = res[len(res)-maxBytes:]
+		if idx := strings.IndexByte(res, '\n'); idx >= 0 {
+			res = res[idx+1:]
+		}
+	}
+	return res
+}
+
+// FormatRestoredText formats cleaned scrollback with header and resets for VTE playback
+func FormatRestoredText(dump string, savedAt time.Time) string {
+	clean := CleanScrollbackDump(dump)
+	if clean == "" {
+		return ""
+	}
+	lines := strings.Split(clean, "\n")
+	body := strings.Join(lines, "\r\n")
+	header := FormatRestoredHistoryHeader(savedAt)
+	return "\x1b[0m\x1b[?25h" + body + "\r\n" + header + "\x1b[0m"
 }

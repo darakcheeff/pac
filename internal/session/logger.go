@@ -12,7 +12,7 @@ import (
 	"github.com/darakcheeff/pac/internal/storage"
 )
 
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\([a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+var ansiRegex = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[()][AB012]|[=>78DEHMNO])`)
 
 // SessionLogger logs terminal I/O to a file
 type SessionLogger struct {

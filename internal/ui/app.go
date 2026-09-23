@@ -1053,7 +1053,19 @@ func (app *AppWindow) setupSignals() {
 		dlg.SetCurrentName(fmt.Sprintf("%s_%s.log", sess.Title, time.Now().Format("20060102_150405")))
 		if dlg.Run() == gtk.RESPONSE_ACCEPT {
 			filename := dlg.GetFilename()
-			_ = os.WriteFile(filename, []byte(sess.GetScrollbackText()), 0644)
+			textToSave := ""
+			if tab := app.TabView.FindTabBySession(sess); tab != nil {
+				for _, p := range tab.Panes {
+					if p.Session == sess && p.Terminal != nil {
+						textToSave = p.Terminal.GetCleanText()
+						break
+					}
+				}
+			}
+			if textToSave == "" {
+				textToSave = session.CleanScrollbackDump(sess.GetScrollbackText())
+			}
+			_ = os.WriteFile(filename, []byte(textToSave), 0644)
 			app.StatusLabel.SetText(i18n.T("Журнал сохранен: ", "Log saved: ") + filename)
 		}
 	}
@@ -1384,8 +1396,10 @@ func (app *AppWindow) RestoreSavedSessions() {
 					sess.Resize(rows, cols)
 				}
 				if savedState.ScrollbackDump != "" {
-					header := session.FormatRestoredHistoryHeader(savedState.SavedAt)
-					term.FeedText(savedState.ScrollbackDump + header)
+					restored := session.FormatRestoredText(savedState.ScrollbackDump, savedState.SavedAt)
+					if restored != "" {
+						term.FeedText(restored)
+					}
 				}
 
 				tabItem, _ := app.TabView.AddTab(sess, term)
@@ -1479,8 +1493,10 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 				sess.Resize(rows, cols)
 			}
 			if st.ScrollbackDump != "" {
-				header := session.FormatRestoredHistoryHeader(st.SavedAt)
-				term.FeedText(st.ScrollbackDump + header)
+				restored := session.FormatRestoredText(st.ScrollbackDump, st.SavedAt)
+				if restored != "" {
+					term.FeedText(restored)
+				}
 			}
 
 			isVertical := st.SplitDirection == "vertical" || st.SplitDirection == "left-right"
@@ -1512,10 +1528,14 @@ func (app *AppWindow) SaveAllSessionState() {
 				hostID = s.Host.ID
 				protocol = s.Host.Protocol
 			}
-			scrollback := s.GetScrollbackText()
-			if len(scrollback) > 50*1024 {
-				scrollback = scrollback[len(scrollback)-50*1024:]
+			scrollback := ""
+			if pane.Terminal != nil {
+				scrollback = pane.Terminal.GetCleanText()
 			}
+			if scrollback == "" {
+				scrollback = s.GetScrollbackText()
+			}
+			scrollback = session.CleanScrollbackDump(scrollback)
 			workingDir := "/"
 			if s.SFTPClient != nil {
 				workingDir = s.SFTPClient.CurrentDir()

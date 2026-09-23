@@ -26,6 +26,11 @@ static glong get_terminal_column_count(GtkWidget* term) {
     return vte_terminal_get_column_count(VTE_TERMINAL(term));
 }
 
+static char* get_clean_text(VteTerminal* term) {
+    if (!term) return NULL;
+    return vte_terminal_get_text_format(term, VTE_FORMAT_TEXT);
+}
+
 static void paste_clean_text(VteTerminal* term, GdkAtom selection) {
     GtkClipboard* clipboard = gtk_clipboard_get(selection);
     if (!clipboard) return;
@@ -576,6 +581,19 @@ func (t *Terminal) AttachPTY(bridge *pty.PTYBridge) error {
 		return fmt.Errorf("invalid pty bridge")
 	}
 	return t.SetPTYFD(int(bridge.Master.Fd()))
+}
+
+// GetCleanText returns the clean plain-text content of the terminal without ANSI escape codes
+func (t *Terminal) GetCleanText() string {
+	if t.vteTerm == nil {
+		return ""
+	}
+	cStr := C.get_clean_text(t.vteTerm)
+	if cStr == nil {
+		return ""
+	}
+	defer C.g_free(C.gpointer(cStr))
+	return C.GoString(cStr)
 }
 
 // FeedText writes string directly to VTE display buffer
