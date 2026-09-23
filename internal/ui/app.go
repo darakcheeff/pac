@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	_ "embed"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -25,6 +26,9 @@ import (
 	"github.com/gotk3/gotk3/gtk"
 	cryptoSsh "golang.org/x/crypto/ssh"
 )
+
+//go:embed assets/icon.png
+var appIconBytes []byte
 
 // AppWindow represents the primary application window
 type AppWindow struct {
@@ -483,6 +487,18 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	}
 	win.SetTitle("PAC Connection Manager NextGen")
 	win.SetDefaultSize(1200, 750)
+
+	if len(appIconBytes) > 0 {
+		loader, err := gdk.PixbufLoaderNew()
+		if err == nil {
+			_, _ = loader.Write(appIconBytes)
+			_ = loader.Close()
+			if pixbuf, err := loader.GetPixbuf(); err == nil && pixbuf != nil {
+				win.SetIcon(pixbuf)
+				gtk.WindowSetDefaultIcon(pixbuf)
+			}
+		}
+	}
 
 	// Connect OSC 52 terminal clipboard sequences to system clipboard
 	session.GlobalClipboardHandler = func(target, text string) {

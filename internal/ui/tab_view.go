@@ -196,6 +196,24 @@ func (tv *TabView) getPaneTitle(p *TerminalPane) string {
 	return "Terminal"
 }
 
+// GetTabTitle returns the full title for a tab item (compound if multiple panes)
+func (tv *TabView) GetTabTitle(item *TabItem) string {
+	if item == nil {
+		return ""
+	}
+	if len(item.Panes) == 0 {
+		if item.Session != nil && item.Session.Title != "" {
+			return item.Session.Title
+		}
+		return "Terminal"
+	}
+	var plainParts []string
+	for _, p := range item.Panes {
+		plainParts = append(plainParts, tv.getPaneTitle(p))
+	}
+	return strings.Join(plainParts, " + ")
+}
+
 // UpdateTabTitle formats tab title with each session colored individually according to state
 func (tv *TabView) UpdateTabTitle(item *TabItem) {
 	if item == nil || item.Label == nil {
@@ -1113,13 +1131,13 @@ func (tv *TabView) SelectSession(sessID string) {
 
 func (tv *TabView) showRenameDialog(item *TabItem) {
 	dlg, _ := gtk.DialogNew()
-	dlg.SetTitle(i18n.T("Переименовать вкладку", "Rename Tab"))
+	dlg.SetTitle(i18n.T("Переименовать", "Rename"))
 	dlg.SetModal(true)
 	dlg.SetDefaultSize(300, 100)
 
 	contentArea, _ := dlg.GetContentArea()
 	entry, _ := gtk.EntryNew()
-	entry.SetText(item.Session.Title)
+	entry.SetText(tv.GetTabTitle(item))
 	entry.SetActivatesDefault(true)
 	contentArea.Add(entry)
 
@@ -1134,6 +1152,9 @@ func (tv *TabView) showRenameDialog(item *TabItem) {
 		newTitle, _ := entry.GetText()
 		if newTitle != "" {
 			item.Session.Title = newTitle
+			if len(item.Panes) > 0 && item.FocusedPane != nil && item.FocusedPane.Session != nil {
+				item.FocusedPane.Session.Title = newTitle
+			}
 			tv.UpdateTabTitle(item)
 		}
 	}
@@ -1148,7 +1169,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	gotoSubmenu, _ := gtk.MenuNew()
 	for idx, it := range tv.items {
 		tabIdx := idx
-		mTab, _ := gtk.MenuItemNewWithLabel(fmt.Sprintf("%d: %s", tabIdx+1, it.Session.Title))
+		mTab, _ := gtk.MenuItemNewWithLabel(fmt.Sprintf("%d: %s", tabIdx+1, tv.GetTabTitle(it)))
 		mTab.Connect("activate", func() {
 			tv.Notebook.SetCurrentPage(tabIdx)
 		})
@@ -1185,28 +1206,32 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	mSplit.SetSubmenu(splitSubmenu)
 	menu.Append(mSplit)
 
-	// 4. Add to Cluster
-	mAddCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Добавить в кластер", "Add to Cluster"))
+	// 4. Cluster ▸
+	mCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Кластер", "Cluster"))
+	clusterSubmenu, _ := gtk.MenuNew()
+
+	mAddCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Добавить в кластер", "Add to cluster"))
 	mAddCluster.Connect("activate", func() {
 		if tv.OnClusterAdmin != nil {
 			tv.OnClusterAdmin()
 		}
 	})
-	menu.Append(mAddCluster)
+	clusterSubmenu.Append(mAddCluster)
 
-	// 5. Remove from Cluster
-	mRemCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить из кластера", "Remove from Cluster"))
+	mRemCluster, _ := gtk.MenuItemNewWithLabel(i18n.T("Удалить из кластера", "Remove from cluster"))
 	mRemCluster.SetSensitive(false)
-	menu.Append(mRemCluster)
+	clusterSubmenu.Append(mRemCluster)
 
-	// 6. Cluster Admin...
-	mClusterAdmin, _ := gtk.MenuItemNewWithLabel(i18n.T("Управление кластерами...", "Cluster Admin..."))
+	mClusterAdmin, _ := gtk.MenuItemNewWithLabel(i18n.T("Управление кластерами...", "Cluster admin..."))
 	mClusterAdmin.Connect("activate", func() {
 		if tv.OnClusterAdmin != nil {
 			tv.OnClusterAdmin()
 		}
 	})
-	menu.Append(mClusterAdmin)
+	clusterSubmenu.Append(mClusterAdmin)
+
+	mCluster.SetSubmenu(clusterSubmenu)
+	menu.Append(mCluster)
 
 	// 7. Find...
 	mFind, _ := gtk.MenuItemNewWithLabel(i18n.T("Поиск...", "Find..."))
@@ -1236,14 +1261,14 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mEditSession)
 
 	// 10. Temporary TAB Label change...
-	mRename, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать вкладку...", "Rename Tab..."))
+	mRename, _ := gtk.MenuItemNewWithLabel(i18n.T("Переименовать...", "Rename..."))
 	mRename.Connect("activate", func() {
 		tv.showRenameDialog(item)
 	})
 	menu.Append(mRename)
 
 	// 11. New connection
-	mNewConn, _ := gtk.MenuItemNewWithLabel(i18n.T("Новое подключение...", "New connection..."))
+	mNewConn, _ := gtk.MenuItemNewWithLabel(i18n.T("Новое...", "New..."))
 	mNewConn.Connect("activate", func() {
 		if tv.OnNewConnection != nil {
 			tv.OnNewConnection()
@@ -1252,7 +1277,7 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 	menu.Append(mNewConn)
 
 	// 12. Duplicate connection
-	mDuplicate, _ := gtk.MenuItemNewWithLabel(i18n.T("Дублировать подключение", "Duplicate connection"))
+	mDuplicate, _ := gtk.MenuItemNewWithLabel(i18n.T("Дублировать", "Duplicate"))
 	mDuplicate.Connect("activate", func() {
 		if tv.OnDuplicateRequested != nil {
 			tv.OnDuplicateRequested(item.Session)
@@ -1420,9 +1445,9 @@ func (tv *TabView) buildSplitSubmenu(currentTab *TabItem, sess *session.Session,
 
 		for _, other := range otherTabs {
 			targetOther := other
-			title := "Tab"
-			if targetOther.Session != nil && targetOther.Session.Title != "" {
-				title = targetOther.Session.Title
+			title := tv.GetTabTitle(targetOther)
+			if title == "" {
+				title = "Tab"
 			}
 			mOther, _ := gtk.MenuItemNewWithLabel(i18n.Tf("Объединить с вкладкой: %s", "Merge with tab: %s", title))
 			mOther.Connect("activate", func() {

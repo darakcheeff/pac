@@ -2,7 +2,7 @@
 Name=PAC Connection Manager NextGen
 Comment=Advanced SSH, SFTP, Telnet, Serial and Remote Session Manager
 Exec=pac
-Icon=utilities-terminal
+Icon=pac
 Terminal=false
 Type=Application
 Categories=Network;System;TerminalEmulator;

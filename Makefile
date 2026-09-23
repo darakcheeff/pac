@@ -19,3 +19,5 @@ install: build
 	install -m 755 $(APP_NAME) $(DESTDIR)$(PREFIX)/bin/$(APP_NAME)
 	install -d $(DESTDIR)$(PREFIX)/share/applications
 	install -m 644 pac.desktop $(DESTDIR)$(PREFIX)/share/applications/pac.desktop
+	install -d $(DESTDIR)$(PREFIX)/share/pixmaps
+	install -m 644 assets/icon.png $(DESTDIR)$(PREFIX)/share/pixmaps/pac.png
