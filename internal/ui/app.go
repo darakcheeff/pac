@@ -57,6 +57,7 @@ type AppWindow struct {
 	currentTheme  string
 	btnTheme      *gtk.ToolButton
 	themeProvider *gtk.CssProvider
+	trayIcon      *TrayIcon
 }
 
 
@@ -643,6 +644,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		})
 	}()
 
+	// Initialize system tray icon
+	app.trayIcon = setupTrayIcon(app)
+
 	return app, nil
 }
 
@@ -1092,6 +1096,11 @@ func (app *AppWindow) setupSignals() {
 
 
 	app.Window.Connect("delete-event", func() bool {
+		if app.trayIcon != nil {
+			// Minimize to tray: hide the window but keep the process alive
+			app.Window.Hide()
+			return true // prevent default destroy
+		}
 		app.Quit()
 		return false
 	})
@@ -1598,6 +1607,9 @@ func (app *AppWindow) Quit() {
 	app.manager.CloseAll()
 	_ = app.watcherMgr.Close()
 	_ = app.store.Close()
+	if app.trayIcon != nil {
+		app.trayIcon.Destroy()
+	}
 	log.Printf("[APP] Exiting GTK main loop.")
 	gtk.MainQuit()
 	os.Exit(0)
