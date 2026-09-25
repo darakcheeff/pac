@@ -43,17 +43,17 @@ func ConnectSSH(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, 
 func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, outputWriter io.Writer, jumpClient *ssh.Client) (*SSHSession, error) {
 	authMethods := []ssh.AuthMethod{}
 	var agentClient agent.ExtendedAgent
-	// 1. SSH Agent (with KeePassXC / OpenSSH agent socket autodetection)
-	if sock := getSSHAgentSocket(); sock != "" {
-		if conn, err := net.Dial("unix", sock); err == nil {
-			agentClient = agent.NewClient(conn)
-			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
-		}
-	}
 
-	// 2. Private Key
+	// 1. Private Key (explicit file) — always tried FIRST when specified,
+	//    so it takes priority over any SSH agent keys.
 	if host.KeyPath != "" {
 		keyPath := host.KeyPath
+		// Expand ~ to home dir
+		if strings.HasPrefix(keyPath, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				keyPath = filepath.Join(home, keyPath[2:])
+			}
+		}
 		if strings.HasSuffix(keyPath, ".pub") {
 			privCandidate := strings.TrimSuffix(keyPath, ".pub")
 			if _, err := os.Stat(privCandidate); err == nil {
@@ -73,12 +73,22 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 				signer, err = ssh.ParsePrivateKey(keyBytes)
 			}
 			if err == nil {
+				log.Printf("[SSH] Using private key: %s (type: %s)", keyPath, signer.PublicKey().Type())
 				authMethods = append(authMethods, ssh.PublicKeys(signer))
 			} else {
 				log.Printf("[SSH] Failed to parse private key %s: %v", keyPath, err)
 			}
 		} else {
 			log.Printf("[SSH] Failed to read private key %s: %v", keyPath, err)
+		}
+	}
+
+	// 2. SSH Agent (with KeePassXC / OpenSSH agent socket autodetection)
+	//    Added AFTER explicit key so it doesn't exhaust server's MaxAuthTries first.
+	if sock := getSSHAgentSocket(); sock != "" {
+		if conn, err := net.Dial("unix", sock); err == nil {
+			agentClient = agent.NewClient(conn)
+			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
 		}
 	}
 
