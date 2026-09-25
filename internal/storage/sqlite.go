@@ -153,6 +153,7 @@ func (s *Store) initSchema() error {
 	s.migrateColumn("saved_sessions", "scrollback_dump", "TEXT")
 	s.migrateColumn("saved_sessions", "working_dir", "TEXT")
 	s.migrateColumn("saved_sessions", "host_snapshot", "TEXT")
+	s.migrateColumn("saved_sessions", "pane_index", "INTEGER DEFAULT 0")
 	s.migrateColumn("hosts", "notes", "TEXT")
 	s.migrateColumn("hosts", "proxy_jump_host", "TEXT")
 	s.migrateColumn("hosts", "port_forwards", "TEXT")
@@ -443,8 +444,9 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 		COALESCE(scrollback_dump, ''),
 		COALESCE(notes, ''),
 		saved_at,
-		COALESCE(host_snapshot, '')
-		FROM saved_sessions ORDER BY tab_index`)
+		COALESCE(host_snapshot, ''),
+		COALESCE(pane_index, 0)
+		FROM saved_sessions ORDER BY tab_index, pane_index, rowid`)
 	if err != nil {
 		log.Printf("[DB] ERROR querying saved_sessions: %v", err)
 		return nil, err
@@ -459,6 +461,7 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 			&state.SplitParentID, &state.SplitDirection, &state.WorkingDir,
 			&state.ScrollbackDump, &state.Notes, &state.SavedAt,
 			&state.HostSnapshot,
+			&state.PaneIndex,
 		); err != nil {
 			log.Printf("[DB] ERROR scanning saved_sessions row: %v", err)
 			return nil, err
@@ -485,8 +488,8 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 
 	stmt, err := tx.Prepare(`INSERT INTO saved_sessions (
 		id, host_id, title, protocol, tab_index, split_parent_id, split_direction,
-		working_dir, scrollback_dump, notes, saved_at, host_snapshot
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		working_dir, scrollback_dump, notes, saved_at, host_snapshot, pane_index
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -496,7 +499,7 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 		if _, err := stmt.Exec(
 			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.SplitParentID,
 			st.SplitDirection, st.WorkingDir, st.ScrollbackDump, st.Notes, time.Now(),
-			st.HostSnapshot,
+			st.HostSnapshot, st.PaneIndex,
 		); err != nil {
 			return err
 		}

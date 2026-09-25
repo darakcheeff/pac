@@ -615,19 +615,39 @@ func (tv *TabView) handleTabScroll(event *gdk.Event, checkY bool) bool {
 	return true
 }
 
+// FindPaneBySessionID finds a pane in the tab item matching the given session ID
+func (tv *TabView) FindPaneBySessionID(item *TabItem, sessionID string) *TerminalPane {
+	if item == nil || sessionID == "" {
+		return nil
+	}
+	for _, p := range item.Panes {
+		if p.Session != nil && p.Session.ID == sessionID {
+			return p
+		}
+	}
+	return nil
+}
+
 // SplitActiveTab splits the focused pane in the tab (vertical = left/right, horizontal = top/bottom)
 func (tv *TabView) SplitActiveTab(item *TabItem, newSess *session.Session, newTerm *vte.Terminal, vertical bool) error {
+	return tv.SplitPane(item, nil, newSess, newTerm, vertical)
+}
+
+// SplitPane splits the specified targetPane (or focused pane if nil) in the tab (vertical = left/right, horizontal = top/bottom)
+func (tv *TabView) SplitPane(item *TabItem, targetPane *TerminalPane, newSess *session.Session, newTerm *vte.Terminal, vertical bool) error {
 	if item == nil || item.ContentBox == nil {
-		log.Printf("[TAB] SplitActiveTab: item or ContentBox is nil")
+		log.Printf("[TAB] SplitPane: item or ContentBox is nil")
 		return nil
 	}
 
-	targetPane := item.FocusedPane
+	if targetPane == nil {
+		targetPane = item.FocusedPane
+	}
 	if targetPane == nil && len(item.Panes) > 0 {
 		targetPane = item.Panes[0]
 	}
 	if targetPane == nil {
-		log.Printf("[TAB] SplitActiveTab: no target pane available")
+		log.Printf("[TAB] SplitPane: no target pane available")
 		return nil
 	}
 

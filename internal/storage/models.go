@@ -104,6 +104,7 @@ type SavedSessionState struct {
 	Title          string    `json:"title"`
 	Protocol       Protocol  `json:"protocol"`
 	TabIndex       int       `json:"tab_index"`
+	PaneIndex      int       `json:"pane_index"`
 	SplitParentID  string    `json:"split_parent_id"`
 	SplitDirection string    `json:"split_direction"` // "none", "horizontal", "vertical"
 	WorkingDir     string    `json:"working_dir"`

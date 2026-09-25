@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1451,8 +1452,18 @@ func (app *AppWindow) RestoreSavedSessions() {
 					log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
 				}
 
-				// Restore split children into this tabItem
-				for _, chState := range splitStates {
+				// Sort split children by PaneIndex so parent panes are restored before their children
+				sort.Slice(splitStates, func(i, j int) bool {
+					return splitStates[i].PaneIndex < splitStates[j].PaneIndex
+				})
+
+				// Restore split children into this tabItem sequentially
+				var restoreNextSplit func(idx int)
+				restoreNextSplit = func(idx int) {
+					if idx >= len(splitStates) {
+						return
+					}
+					chState := splitStates[idx]
 					app.restoreSplitPane(tabItem, chState, func() {
 						restoredCount++
 						if restoredCount >= totalSessions {
@@ -1461,7 +1472,11 @@ func (app *AppWindow) RestoreSavedSessions() {
 							app.restoreMu.Unlock()
 							log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
 						}
+						restoreNextSplit(idx + 1)
 					})
+				}
+				if len(splitStates) > 0 {
+					restoreNextSplit(0)
 				}
 			})
 		}()
@@ -1541,8 +1556,12 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 				}
 			}
 
+			var targetParent *TerminalPane
+			if st.SplitParentID != "" {
+				targetParent = app.TabView.FindPaneBySessionID(tabItem, st.SplitParentID)
+			}
 			isVertical := st.SplitDirection == "vertical" || st.SplitDirection == "left-right"
-			_ = app.TabView.SplitActiveTab(tabItem, sess, term, isVertical)
+			_ = app.TabView.SplitPane(tabItem, targetParent, sess, term, isVertical)
 			app.attachSessionExitHandler(sess, term, h, st.Title)
 		})
 	}()
@@ -1609,6 +1628,7 @@ func (app *AppWindow) SaveAllSessionState() {
 				Title:          s.Title,
 				Protocol:       protocol,
 				TabIndex:       tabIdx,
+				PaneIndex:      paneIdx,
 				SplitParentID:  parentID,
 				SplitDirection: splitDir,
 				WorkingDir:     workingDir,
@@ -1622,8 +1642,8 @@ func (app *AppWindow) SaveAllSessionState() {
 	}
 	hasher := sha256.New()
 	for _, st := range states {
-		fmt.Fprintf(hasher, "%s|%s|%s|%s|%d|%s|%s|%s|%s|%s;",
-			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex,
+		fmt.Fprintf(hasher, "%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%s;",
+			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.PaneIndex,
 			st.SplitParentID, st.SplitDirection, st.WorkingDir, st.Notes, st.ScrollbackDump)
 	}
 	currentHash := hex.EncodeToString(hasher.Sum(nil))
