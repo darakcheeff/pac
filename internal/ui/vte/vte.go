@@ -133,11 +133,49 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
     return FALSE;
 }
 
+// Disable all mouse-tracking modes when the pointer leaves this terminal pane.
+// This prevents escape sequences from being fed into a neighbouring pane's
+// stdin when the app inside uses any mouse-reporting mode (X10/normal/button/any).
+static gboolean on_vte_leave_notify(GtkWidget* widget, GdkEventCrossing* event, gpointer user_data) {
+    // Only act on real pointer leaves (not grabs / window management events)
+    if (event->mode != GDK_CROSSING_NORMAL && event->mode != GDK_CROSSING_UNGRAB) {
+        return FALSE;
+    }
+    VteTerminal* term = VTE_TERMINAL(widget);
+    // Turn off: X10 mouse, normal mouse, button-motion, any-motion, SGR mouse, focus tracking
+    const char* disable_mouse =
+        "\x1b[?1000l"   // normal mouse tracking off
+        "\x1b[?1002l"   // button-motion tracking off
+        "\x1b[?1003l"   // any-motion tracking off
+        "\x1b[?1006l"   // SGR extended mouse off
+        "\x1b[?1015l"   // URXVT extended mouse off
+        "\x1b[?9l";     // X10 mouse off
+    vte_terminal_feed(term, disable_mouse, strlen(disable_mouse));
+    return FALSE;
+}
+
+// When pointer enters the terminal pane, send focus-in (ESC [ I) so apps that
+// use DECSET 1004 (focus-tracking) know the terminal has focus again and can
+// re-enable their mouse modes on their own.
+static gboolean on_vte_enter_notify(GtkWidget* widget, GdkEventCrossing* event, gpointer user_data) {
+    if (event->mode != GDK_CROSSING_NORMAL && event->mode != GDK_CROSSING_UNGRAB) {
+        return FALSE;
+    }
+    VteTerminal* term = VTE_TERMINAL(widget);
+    // Send focus-in event sequence — apps using bracketed-focus (DECSET 1004)
+    // will react by re-enabling their mouse mode.
+    vte_terminal_feed(term, "\x1b[I", 3);
+    return FALSE;
+}
+
 static void configure_vte_terminal(GtkWidget* w) {
     VteTerminal* term = VTE_TERMINAL(w);
 
     gtk_widget_set_can_focus(w, TRUE);
     gtk_widget_set_can_default(w, TRUE);
+
+    // Ensure enter/leave notify events are delivered to the widget
+    gtk_widget_add_events(w, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
 
     vte_terminal_set_mouse_autohide(term, TRUE);
     vte_terminal_set_bold_is_bright(term, TRUE);
@@ -155,6 +193,14 @@ static void configure_vte_terminal(GtkWidget* w) {
     g_signal_connect(w, "current-directory-uri-changed", G_CALLBACK(on_vte_directory_uri_changed), NULL);
     g_signal_connect(w, "window-title-changed", G_CALLBACK(on_vte_window_title_changed), NULL);
     g_signal_connect(w, "contents-changed", G_CALLBACK(on_vte_contents_changed), NULL);
+
+    // When the mouse leaves this VTE widget, disable all mouse-tracking modes
+    // so the app running inside doesn't receive spurious mouse events generated
+    // by the cursor hovering over a neighbouring split pane.
+    g_signal_connect(w, "leave-notify-event", G_CALLBACK(on_vte_leave_notify), NULL);
+    // When the mouse enters this VTE widget, send focus-in notification so
+    // apps that use focus-tracking (DECSET 1004) wake up correctly.
+    g_signal_connect(w, "enter-notify-event", G_CALLBACK(on_vte_enter_notify), NULL);
 }
 
 static int create_vte_native_pty(GtkWidget* term, char* slave_path, size_t slave_path_len, GError** error) {
