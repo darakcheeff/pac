@@ -1357,9 +1357,13 @@ func (app *AppWindow) RestoreSavedSessions() {
 		var h *storage.Host
 		hostFoundInDB := false
 		if st.HostID != "" {
-			h, _ = app.store.GetHost(st.HostID)
+			var dbErr error
+			h, dbErr = app.store.GetHost(st.HostID)
 			if h != nil {
 				hostFoundInDB = true
+				log.Printf("[RESTORE] Found host in DB: id=%q name=%q proto=%s host=%q port=%d", h.ID, h.Name, h.Protocol, h.Host, h.Port)
+			} else {
+				log.Printf("[RESTORE] GetHost(%q) returned nil, err=%v", st.HostID, dbErr)
 			}
 		}
 		if h == nil {
@@ -1406,6 +1410,8 @@ func (app *AppWindow) RestoreSavedSessions() {
 		splitStates := splits
 
 		go func() {
+			log.Printf("[RESTORE] Starting session %q: host_id=%q proto=%s host=%q port=%d user=%q key=%q",
+				savedState.Title, hostCopy.ID, hostCopy.Protocol, hostCopy.Host, hostCopy.Port, hostCopy.Username, hostCopy.KeyPath)
 			sess, err := session.StartSessionWithBridge(context.Background(), hostCopy, savedState.Title, app.settings.DefaultLogsDir, bridge, nil)
 			glib.IdleAdd(func() {
 				if err != nil {
