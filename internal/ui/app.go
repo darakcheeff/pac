@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -1354,18 +1355,35 @@ func (app *AppWindow) RestoreSavedSessions() {
 		splits := grp.splits
 
 		var h *storage.Host
+		hostFoundInDB := false
 		if st.HostID != "" {
 			h, _ = app.store.GetHost(st.HostID)
-		}
-		if h == nil {
-			h = &storage.Host{
-				ID:             st.HostID,
-				Name:           st.Title,
-				Protocol:       st.Protocol,
-				TerminalType:   "xterm-256color",
-				RestoreHistory: true,
+			if h != nil {
+				hostFoundInDB = true
 			}
 		}
+		if h == nil {
+			// Host not found in DB — try the saved snapshot (Quick Connect hosts)
+			if st.HostSnapshot != "" {
+				var snapHost storage.Host
+				if err := json.Unmarshal([]byte(st.HostSnapshot), &snapHost); err == nil {
+					h = &snapHost
+					log.Printf("[RESTORE] Using host snapshot for quick-connect session %q", st.Title)
+				}
+			}
+			// Still nil — fall back to local terminal with history
+			if h == nil {
+				log.Printf("[RESTORE] Host %q not found in DB and no snapshot, restoring as local terminal", st.Title)
+				h = &storage.Host{
+					ID:             st.HostID,
+					Name:           st.Title,
+					Protocol:       storage.ProtoLocal,
+					TerminalType:   "xterm-256color",
+					RestoreHistory: true,
+				}
+			}
+		}
+		_ = hostFoundInDB // used for future logic if needed
 
 		term, err := vte.NewTerminal()
 		if err != nil {
@@ -1450,12 +1468,21 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 		h, _ = app.store.GetHost(st.HostID)
 	}
 	if h == nil {
-		h = &storage.Host{
-			ID:             st.HostID,
-			Name:           st.Title,
-			Protocol:       st.Protocol,
-			TerminalType:   "xterm-256color",
-			RestoreHistory: true,
+		// Try snapshot first (Quick Connect hosts not in DB)
+		if st.HostSnapshot != "" {
+			var snapHost storage.Host
+			if err := json.Unmarshal([]byte(st.HostSnapshot), &snapHost); err == nil {
+				h = &snapHost
+			}
+		}
+		if h == nil {
+			h = &storage.Host{
+				ID:             st.HostID,
+				Name:           st.Title,
+				Protocol:       storage.ProtoLocal,
+				TerminalType:   "xterm-256color",
+				RestoreHistory: true,
+			}
 		}
 	}
 
@@ -1533,9 +1560,17 @@ func (app *AppWindow) SaveAllSessionState() {
 			}
 			hostID := ""
 			protocol := storage.ProtoLocal
+			hostSnapshot := ""
 			if s.Host != nil {
 				hostID = s.Host.ID
 				protocol = s.Host.Protocol
+				// For Quick Connect hosts (not saved in the DB), embed the full
+				// host config as JSON so it can be restored without a DB lookup.
+				if strings.HasPrefix(hostID, "quick-") {
+					if snap, err := json.Marshal(s.Host); err == nil {
+						hostSnapshot = string(snap)
+					}
+				}
 			}
 			scrollback := ""
 			if pane.Terminal != nil {
@@ -1574,6 +1609,7 @@ func (app *AppWindow) SaveAllSessionState() {
 				ScrollbackDump: scrollback,
 				Notes:          s.Notes,
 				SavedAt:        time.Now(),
+				HostSnapshot:   hostSnapshot,
 			}
 			states = append(states, st)
 		}

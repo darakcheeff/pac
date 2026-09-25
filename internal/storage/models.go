@@ -110,6 +110,9 @@ type SavedSessionState struct {
 	ScrollbackDump string    `json:"scrollback_dump"` // Last N lines of history
 	Notes          string    `json:"notes"`           // Tab specific note
 	SavedAt        time.Time `json:"saved_at"`
+	// HostSnapshot stores full host config for hosts not saved in the DB (e.g. Quick Connect).
+	// If non-empty, used instead of looking up HostID in the hosts table.
+	HostSnapshot string `json:"host_snapshot,omitempty"`
 }
 
 // AppSettings represents global application configuration

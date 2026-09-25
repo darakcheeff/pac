@@ -152,6 +152,7 @@ func (s *Store) initSchema() error {
 	s.migrateColumn("saved_sessions", "split_direction", "TEXT")
 	s.migrateColumn("saved_sessions", "scrollback_dump", "TEXT")
 	s.migrateColumn("saved_sessions", "working_dir", "TEXT")
+	s.migrateColumn("saved_sessions", "host_snapshot", "TEXT")
 	s.migrateColumn("hosts", "notes", "TEXT")
 	s.migrateColumn("hosts", "proxy_jump_host", "TEXT")
 	s.migrateColumn("hosts", "port_forwards", "TEXT")
@@ -441,7 +442,8 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 		COALESCE(working_dir, ''),
 		COALESCE(scrollback_dump, ''),
 		COALESCE(notes, ''),
-		saved_at
+		saved_at,
+		COALESCE(host_snapshot, '')
 		FROM saved_sessions ORDER BY tab_index`)
 	if err != nil {
 		log.Printf("[DB] ERROR querying saved_sessions: %v", err)
@@ -456,6 +458,7 @@ func (s *Store) GetSavedSessions() ([]SavedSessionState, error) {
 			&state.ID, &state.HostID, &state.Title, &state.Protocol, &state.TabIndex,
 			&state.SplitParentID, &state.SplitDirection, &state.WorkingDir,
 			&state.ScrollbackDump, &state.Notes, &state.SavedAt,
+			&state.HostSnapshot,
 		); err != nil {
 			log.Printf("[DB] ERROR scanning saved_sessions row: %v", err)
 			return nil, err
@@ -482,8 +485,8 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 
 	stmt, err := tx.Prepare(`INSERT INTO saved_sessions (
 		id, host_id, title, protocol, tab_index, split_parent_id, split_direction,
-		working_dir, scrollback_dump, notes, saved_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		working_dir, scrollback_dump, notes, saved_at, host_snapshot
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -493,6 +496,7 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 		if _, err := stmt.Exec(
 			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.SplitParentID,
 			st.SplitDirection, st.WorkingDir, st.ScrollbackDump, st.Notes, time.Now(),
+			st.HostSnapshot,
 		); err != nil {
 			return err
 		}
