@@ -58,6 +58,7 @@ type AppWindow struct {
 	lastSavedMu   sync.Mutex
 	currentTheme  string
 	btnTheme      *gtk.ToolButton
+	btnExit       *gtk.ToolButton
 	themeProvider *gtk.CssProvider
 	trayIcon      *TrayIcon
 }
@@ -448,6 +449,16 @@ func (app *AppWindow) applyTheme(theme string) {
 	}
 
 	app.updateThemeButton()
+	app.updateExitButton()
+}
+
+// updateExitButton updates the door icon for the exit button according to the theme
+func (app *AppWindow) updateExitButton() {
+	if app.btnExit == nil {
+		return
+	}
+	app.btnExit.SetIconWidget(GetDoorExitImage(app.currentTheme == "dark"))
+	app.btnExit.ShowAll()
 }
 
 // updateThemeButton updates icon and tooltip for theme toggle button
@@ -786,6 +797,15 @@ func (app *AppWindow) setupMenuAndToolbar() {
 	})
 	app.ToolBar.Insert(btnTheme, -1)
 	app.updateThemeButton()
+
+	// 10. Exit Application (Door symbol: quits application completely instead of minimizing to tray)
+	btnExit, _ := gtk.ToolButtonNew(GetDoorExitImage(app.currentTheme == "dark"), i18n.T("Выход", "Exit"))
+	app.btnExit = btnExit
+	btnExit.SetTooltipText(i18n.T("Выход из программы", "Exit Application"))
+	btnExit.Connect("clicked", func() {
+		app.Quit()
+	})
+	app.ToolBar.Insert(btnExit, -1)
 }
 
 

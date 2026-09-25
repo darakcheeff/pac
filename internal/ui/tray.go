@@ -18,9 +18,17 @@ static AppIndicator* pac_create_indicator(const char* icon_path) {
     return ind;
 }
 
-static void pac_set_indicator_icon_path(AppIndicator* ind, const char* dir, const char* name) {
+static void pac_set_indicator_title(AppIndicator* ind, const char* title) {
+    app_indicator_set_title(ind, title);
+}
+
+static void pac_set_indicator_icon_path(AppIndicator* ind, const char* dir, const char* name, const char* desc) {
     app_indicator_set_icon_theme_path(ind, dir);
-    app_indicator_set_icon_full(ind, name, "PAC");
+    app_indicator_set_icon_full(ind, name, desc);
+}
+
+static void pac_set_indicator_secondary(AppIndicator* ind, GtkWidget* item) {
+    app_indicator_set_secondary_activate_target(ind, item);
 }
 
 static void pac_set_indicator_menu(AppIndicator* ind, GtkMenu* menu) {
@@ -83,12 +91,19 @@ func setupTrayIcon(app *AppWindow) *TrayIcon {
 		return nil
 	}
 
-	// Set icon — name without extension, dir is the theme path
+	// Set title ("PacNG") which displays as tooltip on panel hover
+	cTitle := C.CString("PacNG")
+	defer C.free(unsafe.Pointer(cTitle))
+	C.pac_set_indicator_title(t.indicator, cTitle)
+
+	// Set icon — name without extension, dir is the theme path, desc is tooltip
 	cIconDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cIconDir))
 	cIconName := C.CString("pac-tray")
 	defer C.free(unsafe.Pointer(cIconName))
-	C.pac_set_indicator_icon_path(t.indicator, cIconDir, cIconName)
+	cIconDesc := C.CString("PacNG")
+	defer C.free(unsafe.Pointer(cIconDesc))
+	C.pac_set_indicator_icon_path(t.indicator, cIconDir, cIconName, cIconDesc)
 
 	// Build the right-click / scroll-wheel context menu
 	t.buildMenu()
@@ -127,6 +142,9 @@ func (t *TrayIcon) buildMenu() {
 	// Pass GtkMenu* to AppIndicator via CGo
 	menuNative := menu.Native()
 	C.pac_set_indicator_menu(t.indicator, (*C.GtkMenu)(unsafe.Pointer(menuNative)))
+
+	// Connect secondary activate target (middle click) to show/hide
+	C.pac_set_indicator_secondary(t.indicator, (*C.GtkWidget)(unsafe.Pointer(showHideItem.Native())))
 
 	// Hold reference so GC doesn't collect
 	_ = menu

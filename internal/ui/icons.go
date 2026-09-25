@@ -104,6 +104,21 @@ func GetSunImage() *gtk.Image {
 	return imageFromSVG(sunSVG, "weather-clear-symbolic")
 }
 
+const doorExitSVGTemplate = `<?xml version="1.0" encoding="UTF-8"?>
+<svg height="18px" viewBox="0 0 20 20" width="18px" xmlns="http://www.w3.org/2000/svg">
+  <path d="M3 2 C2 2 1 3 1 4 L1 16 C1 17 2 18 3 18 L10 18 C11 18 12 17 12 16 L12 14.5 C12 14 11.5 13.5 11 13.5 C10.5 13.5 10 14 10 14.5 L10 16 L3 16 L3 4 L10 4 L10 5.5 C10 6 10.5 6.5 11 6.5 C11.5 6.5 12 6 12 5.5 L12 4 C12 3 11 2 10 2 Z" fill="%s"/>
+  <path d="M7 9 C6.4 9 6 9.4 6 10 C6 10.6 6.4 11 7 11 L15 11 L15 13 C15 13.4 15.4 13.8 15.8 13.6 L19.4 10.6 C19.8 10.3 19.8 9.7 19.4 9.4 L15.8 6.4 C15.4 6.2 15 6.6 15 7 L15 9 Z" fill="#e55353"/>
+</svg>`
+
+// GetDoorExitImage returns a door exit icon with theme-adaptive contrast and red exit arrow
+func GetDoorExitImage(isDark bool) *gtk.Image {
+	color := "#2e3436"
+	if isDark {
+		color = "#eeeeee"
+	}
+	return imageFromSVG(fmt.Sprintf(doorExitSVGTemplate, color), "application-exit-symbolic")
+}
+
 func imageFromSVG(svgData string, fallbackIcon string) *gtk.Image {
 	loader, err := gdk.PixbufLoaderNewWithType("svg")
 	if err == nil {
