@@ -152,7 +152,7 @@ static void configure_vte_terminal(GtkWidget* w) {
     gtk_widget_set_can_focus(w, TRUE);
     gtk_widget_set_can_default(w, TRUE);
 
-    gtk_widget_add_events(w, GDK_POINTER_MOTION_MASK);
+    gtk_widget_add_events(w, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
 
     vte_terminal_set_mouse_autohide(term, TRUE);
     vte_terminal_set_bold_is_bright(term, TRUE);
@@ -418,35 +418,6 @@ func goOnVteKeyPress(widget *C.GtkWidget, keyval C.guint) C.int {
 		return 1
 	}
 
-	// Track typed commands to detect cd <path>
-	t.mu.Lock()
-	if keyval == C.GDK_KEY_Return || keyval == C.GDK_KEY_KP_Enter {
-		line := strings.TrimSpace(t.cmdLine.String())
-		t.cmdLine.Reset()
-		cb := t.OnDirectoryChanged
-		t.mu.Unlock()
-
-		if strings.HasPrefix(line, "cd ") {
-			targetDir := strings.TrimSpace(strings.TrimPrefix(line, "cd "))
-			targetDir = strings.Trim(targetDir, "\"\x27")
-			if targetDir != "" && cb != nil {
-				cb(targetDir)
-			}
-		}
-	} else if keyval == C.GDK_KEY_BackSpace {
-		if t.cmdLine.Len() > 0 {
-			s := t.cmdLine.String()
-			t.cmdLine.Reset()
-			t.cmdLine.WriteString(s[:len(s)-1])
-		}
-		t.mu.Unlock()
-	} else if keyval >= 32 && keyval <= 126 {
-		t.cmdLine.WriteByte(byte(keyval))
-		t.mu.Unlock()
-	} else {
-		t.mu.Unlock()
-	}
-
 	return 0
 }
 
@@ -460,7 +431,6 @@ type Terminal struct {
 	OnDirectoryChanged func(path string)
 	OnContentsChanged  func()
 	isDisconnected     bool
-	cmdLine            strings.Builder
 	mu                 sync.Mutex
 }
 

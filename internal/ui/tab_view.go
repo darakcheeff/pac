@@ -475,6 +475,28 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		}
 	})
 
+	// Linux-style unfocused hover scrolling:
+	// If the terminal pane does not have keyboard focus, but the running application
+	// requested DECSET 1004 focus tracking (e.g. opencode TUI), wake it up with
+	// FocusIn (\033[I) on scroll so it scrolls its chat history without stealing keyboard focus.
+	term.Widget.Connect("scroll-event", func(_ *glib.Object, _ *gdk.Event) bool {
+		if pane.TabItem != nil && pane.TabItem.FocusedPane != pane {
+			if sess != nil && sess.IsFocusTracking() {
+				pane.Terminal.FeedChild("\x1b[I")
+			}
+		}
+		return false // Let VTE process the scroll event normally
+	})
+
+	term.Widget.Connect("leave-notify-event", func(_ *glib.Object, _ *gdk.Event) bool {
+		if pane.TabItem != nil && pane.TabItem.FocusedPane != pane {
+			if sess != nil && sess.IsFocusTracking() {
+				pane.Terminal.FeedChild("\x1b[O")
+			}
+		}
+		return false
+	})
+
 	return pane
 }
 

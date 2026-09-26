@@ -782,9 +782,14 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	btnSave, _ := dlg.AddButton(i18n.T("Сохранить", "Save"), gtk.RESPONSE_OK)
 	btnSave.SetCanDefault(true)
 	dlg.SetDefault(btnSave)
-
 	dlg.ShowAll()
 	updateProtocolVisibility()
+	notebook.SetCurrentPage(0)
+	if isNew {
+		entryName.GrabFocus()
+	} else {
+		entryHost.GrabFocus()
+	}
 
 	if dlg.Run() == gtk.RESPONSE_OK {
 		host.Name, _ = entryName.GetText()

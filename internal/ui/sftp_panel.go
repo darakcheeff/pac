@@ -1,13 +1,14 @@
 package ui
 
 import (
-	"net/url"
 	"context"
-	"sync"
-	"sync/atomic"
 	"fmt"
+	"log"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/engine/sftp"
@@ -584,8 +585,7 @@ func (sp *SFTPPanel) loadDirectoryInternal(sessionID string, client *sftp.Client
 
 		if err != nil {
 			sp.StatusLabel.SetText(i18n.T("Ошибка: ", "Error: ") + err.Error())
-			sp.showError(i18n.T("Ошибка каталога", "Directory Error"),
-				i18n.Tf("Не удалось загрузить каталог \"%s\":\n\n%s", "Failed to load directory \"%s\":\n\n%s", path, err.Error()))
+			log.Printf("[SFTP] Error loading directory %q: %v", path, err)
 			return
 		}
 

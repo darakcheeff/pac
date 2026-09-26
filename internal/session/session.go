@@ -1,10 +1,11 @@
 package session
 
 import (
-	"os"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -47,6 +48,11 @@ func (w *StreamSplitter) Write(p []byte) (n int, err error) {
 		w.tracker.FeedBytes(p)
 	}
 	if w.sess != nil {
+		if bytes.Contains(p, []byte("\x1b[?1004h")) {
+			w.sess.SetFocusTracking(true)
+		} else if bytes.Contains(p, []byte("\x1b[?1004l")) {
+			w.sess.SetFocusTracking(false)
+		}
 		w.sess.appendScrollback(p)
 	}
 	return n, err
@@ -77,6 +83,10 @@ type Session struct {
 	scrollback   []byte
 	scrollbackMu sync.RWMutex
 
+	// Focus tracking mode requested by remote TUI (DECSET 1004)
+	focusTracking bool
+	focusMu       sync.RWMutex
+
 	lastRows  int
 	lastCols  int
 	ctx       context.Context
@@ -84,6 +94,26 @@ type Session struct {
 	mu        sync.Mutex
 	closed    bool
 	StartedAt time.Time
+}
+
+// SetFocusTracking records whether the remote application enabled DECSET 1004 focus tracking
+func (s *Session) SetFocusTracking(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.focusMu.Lock()
+	defer s.focusMu.Unlock()
+	s.focusTracking = enabled
+}
+
+// IsFocusTracking reports whether the remote application enabled DECSET 1004 focus tracking
+func (s *Session) IsFocusTracking() bool {
+	if s == nil {
+		return false
+	}
+	s.focusMu.RLock()
+	defer s.focusMu.RUnlock()
+	return s.focusTracking
 }
 
 // StartSession connects to host and attaches PTY and logging
