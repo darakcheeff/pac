@@ -1727,6 +1727,7 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 	}
 
 	sess.OnExit = func(exitErr error) {
+		log.Printf("[Session] Session %s exited: %v", host.Name, exitErr)
 		glib.IdleAdd(func() {
 			if term.IsDisconnected() {
 				return

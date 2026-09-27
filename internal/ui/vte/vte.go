@@ -55,6 +55,27 @@ static void reset_terminal_state(VteTerminal* term) {
     vte_terminal_feed(term, reset_seq, strlen(reset_seq));
 }
 
+static void vte_zoom_in(VteTerminal* term) {
+    if (!term) return;
+    gdouble scale = vte_terminal_get_font_scale(term);
+    scale *= 1.1;
+    if (scale > 5.0) scale = 5.0;
+    vte_terminal_set_font_scale(term, scale);
+}
+
+static void vte_zoom_out(VteTerminal* term) {
+    if (!term) return;
+    gdouble scale = vte_terminal_get_font_scale(term);
+    scale /= 1.1;
+    if (scale < 0.2) scale = 0.2;
+    vte_terminal_set_font_scale(term, scale);
+}
+
+static void vte_zoom_reset(VteTerminal* term) {
+    if (!term) return;
+    vte_terminal_set_font_scale(term, 1.0);
+}
+
 static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
     // Intercept middle-click paste to prevent bracketed paste markers (^[[200~ / ^[[201~)
     if (event->button == GDK_BUTTON_MIDDLE) {
@@ -112,6 +133,23 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
         return TRUE;
     }
 
+    // Font Zoom Controls (like mate-terminal / gnome-terminal: Ctrl++, Ctrl+-, Ctrl+0)
+    if (event->state & GDK_CONTROL_MASK) {
+        guint kv = event->keyval;
+        if (kv == GDK_KEY_plus || kv == GDK_KEY_equal || kv == GDK_KEY_KP_Add) {
+            vte_zoom_in(VTE_TERMINAL(widget));
+            return TRUE;
+        }
+        if (kv == GDK_KEY_minus || kv == GDK_KEY_underscore || kv == GDK_KEY_KP_Subtract) {
+            vte_zoom_out(VTE_TERMINAL(widget));
+            return TRUE;
+        }
+        if (kv == GDK_KEY_0 || kv == GDK_KEY_KP_0) {
+            vte_zoom_reset(VTE_TERMINAL(widget));
+            return TRUE;
+        }
+    }
+
     // Pass all other keys cleanly to VTE without client interception
     // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
     if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
@@ -130,6 +168,31 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
         return TRUE; // Consume event
     }
 
+    return FALSE;
+}
+
+static gboolean on_vte_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
+    // Intercept Ctrl + Mouse Wheel for font zoom (mate-terminal style)
+    if (event && (event->state & GDK_CONTROL_MASK)) {
+        if (event->direction == GDK_SCROLL_UP) {
+            vte_zoom_in(VTE_TERMINAL(widget));
+            return TRUE;
+        } else if (event->direction == GDK_SCROLL_DOWN) {
+            vte_zoom_out(VTE_TERMINAL(widget));
+            return TRUE;
+        } else if (event->direction == GDK_SCROLL_SMOOTH) {
+            gdouble dx = 0, dy = 0;
+            if (gdk_event_get_scroll_deltas((GdkEvent*)event, &dx, &dy)) {
+                if (dy < 0) {
+                    vte_zoom_in(VTE_TERMINAL(widget));
+                    return TRUE;
+                } else if (dy > 0) {
+                    vte_zoom_out(VTE_TERMINAL(widget));
+                    return TRUE;
+                }
+            }
+        }
+    }
     return FALSE;
 }
 
@@ -152,7 +215,7 @@ static void configure_vte_terminal(GtkWidget* w) {
     gtk_widget_set_can_focus(w, TRUE);
     gtk_widget_set_can_default(w, TRUE);
 
-    gtk_widget_add_events(w, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
+    gtk_widget_add_events(w, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK | GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK);
 
     vte_terminal_set_mouse_autohide(term, TRUE);
     vte_terminal_set_bold_is_bright(term, TRUE);
@@ -167,6 +230,7 @@ static void configure_vte_terminal(GtkWidget* w) {
 
     g_signal_connect(w, "key-press-event", G_CALLBACK(on_vte_key_press), NULL);
     g_signal_connect(w, "button-press-event", G_CALLBACK(on_vte_button_press), NULL);
+    g_signal_connect(w, "scroll-event", G_CALLBACK(on_vte_scroll_event), NULL);
     g_signal_connect(w, "motion-notify-event", G_CALLBACK(on_vte_motion_notify), NULL);
     g_signal_connect(w, "current-directory-uri-changed", G_CALLBACK(on_vte_directory_uri_changed), NULL);
     g_signal_connect(w, "window-title-changed", G_CALLBACK(on_vte_window_title_changed), NULL);
@@ -679,3 +743,45 @@ func (t *Terminal) ApplyColorScheme(scheme string) {
 	defer C.free(unsafe.Pointer(cScheme))
 	C.set_terminal_scheme_colors(t.vteWidget, cScheme)
 }
+
+// ZoomIn increases terminal font scale (mate-terminal style)
+func (t *Terminal) ZoomIn() {
+	if t.vteTerm != nil {
+		C.vte_zoom_in(t.vteTerm)
+	}
+}
+
+// ZoomOut decreases terminal font scale (mate-terminal style)
+func (t *Terminal) ZoomOut() {
+	if t.vteTerm != nil {
+		C.vte_zoom_out(t.vteTerm)
+	}
+}
+
+// ZoomReset resets terminal font scale to default 1.0 (100%)
+func (t *Terminal) ZoomReset() {
+	if t.vteTerm != nil {
+		C.vte_zoom_reset(t.vteTerm)
+	}
+}
+
+// GetFontScale returns current font scale factor
+func (t *Terminal) GetFontScale() float64 {
+	if t.vteTerm != nil {
+		return float64(C.vte_terminal_get_font_scale(t.vteTerm))
+	}
+	return 1.0
+}
+
+// SetFontScale sets font scale factor clamped to [0.2, 5.0]
+func (t *Terminal) SetFontScale(scale float64) {
+	if t.vteTerm != nil {
+		if scale < 0.2 {
+			scale = 0.2
+		} else if scale > 5.0 {
+			scale = 5.0
+		}
+		C.vte_terminal_set_font_scale(t.vteTerm, C.gdouble(scale))
+	}
+}
+

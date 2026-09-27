@@ -238,6 +238,12 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		keepAliveCountMax: keepAliveMax,
 	}
 
+	serverVer := string(client.ServerVersion())
+	isROSSSH := strings.Contains(strings.ToUpper(serverVer), "ROSSSH")
+	if isROSSSH {
+		log.Printf("[SSH] Detected MikroTik RouterOS (%s); skipping application-level keepalive to avoid SSH_MSG_UNIMPLEMENTED disconnects (TCP keepalive is active)", serverVer)
+	}
+
 	// Monitor remote session exit
 	go func() {
 		waitErr := session.Wait()
@@ -245,13 +251,18 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		wasClosed := s.closed
 		s.closed = true
 		s.mu.Unlock()
+		if waitErr != nil {
+			log.Printf("[SSH] Remote session exited for %s: %v", host.Name, waitErr)
+		} else {
+			log.Printf("[SSH] Remote session closed cleanly for %s", host.Name)
+		}
 		if !wasClosed && s.OnExit != nil {
 			s.OnExit(waitErr)
 		}
 	}()
 
-	// Start KeepAlive loop if interval > 0
-	if keepAliveDur > 0 {
+	// Start KeepAlive loop if interval > 0 and server is not ROSSSH
+	if keepAliveDur > 0 && !isROSSSH {
 		go s.keepAliveLoop()
 	}
 
@@ -331,7 +342,9 @@ func (s *SSHSession) keepAliveLoop() {
 			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
 			if err != nil {
 				missed++
+				log.Printf("[SSH] Keepalive missed (%d/%d): %v", missed, s.keepAliveCountMax, err)
 				if s.keepAliveCountMax > 0 && missed >= s.keepAliveCountMax {
+					log.Printf("[SSH] Keepalive max missed reached (%d), closing session", missed)
 					_ = s.Close()
 					return
 				}
