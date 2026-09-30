@@ -445,7 +445,10 @@ func unregisterTerminal(t *Terminal) {
 	delete(termRegistry, uintptr(unsafe.Pointer(t.vteWidget)))
 }
 
-var titleDirRegex = regexp.MustCompile(`(?:[^;@]*@)?[^;]*:\s*([/~][^\s]*)`)
+var (
+	titleDirRegex    = regexp.MustCompile(`(?:[^;@]*@)?[^;]*:\s*([/~][^\s]*)`)
+	winTitleDirRegex = regexp.MustCompile(`(?:^|[\s:])([A-Za-z]:[\\/][^\s]*)`)
+)
 
 func parseURIPath(rawURI string) string {
 	rawURI = strings.TrimSpace(rawURI)
@@ -453,19 +456,39 @@ func parseURIPath(rawURI string) string {
 		return ""
 	}
 	u, err := url.Parse(rawURI)
+	var p string
 	if err == nil && u.Path != "" {
-		return filepath.Clean(u.Path)
-	}
-	if strings.HasPrefix(rawURI, "file://") {
+		p = u.Path
+	} else if strings.HasPrefix(rawURI, "file://") {
 		idx := strings.Index(rawURI[7:], "/")
 		if idx != -1 {
-			return filepath.Clean(rawURI[7+idx:])
+			p = rawURI[7+idx:]
 		}
 	}
-	return ""
+	if p == "" {
+		return ""
+	}
+	// If path is /C:/... strip leading slash
+	if len(p) >= 4 && p[0] == '/' && p[2] == ':' &&
+		((p[1] >= 'A' && p[1] <= 'Z') || (p[1] >= 'a' && p[1] <= 'z')) {
+		p = p[1:]
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		p = strings.ReplaceAll(p, "\\", "/")
+		return strings.ToUpper(string(p[0])) + ":" + p[2:]
+	}
+	return filepath.Clean(p)
 }
 
 func parseTitleDir(title string) string {
+	if matches := winTitleDirRegex.FindStringSubmatch(title); len(matches) >= 2 {
+		p := strings.TrimSpace(matches[1])
+		p = strings.ReplaceAll(p, "\\", "/")
+		if len(p) >= 2 && p[1] == ':' {
+			return strings.ToUpper(string(p[0])) + ":" + p[2:]
+		}
+		return p
+	}
 	matches := titleDirRegex.FindStringSubmatch(title)
 	if len(matches) >= 2 {
 		return strings.TrimSpace(matches[1])

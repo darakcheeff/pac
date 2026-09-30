@@ -42,6 +42,41 @@ func TestDirectoryTracker(t *testing.T) {
 	if updatedPath != "/home/testuser/projects" {
 		t.Fatalf("expected /home/testuser/projects, got %s", updatedPath)
 	}
+
+	// Windows cmd.exe prompt
+	cmdPrompt := []byte("\r\nC:\\Windows\\System32>")
+	tracker.FeedBytes(cmdPrompt)
+	if updatedPath != "C:/Windows/System32" {
+		t.Fatalf("expected C:/Windows/System32 from cmd.exe prompt, got %s", updatedPath)
+	}
+
+	// Windows PowerShell prompt
+	psPrompt := []byte("\r\nPS C:\\Users\\tech\\Downloads> ")
+	tracker.FeedBytes(psPrompt)
+	if updatedPath != "C:/Users/tech/Downloads" {
+		t.Fatalf("expected C:/Users/tech/Downloads from PowerShell prompt, got %s", updatedPath)
+	}
+
+	// Windows ConPTY OSC 9;9
+	osc99 := []byte("\x1b]9;9;\"C:\\projects\\pac\"\x07")
+	tracker.FeedBytes(osc99)
+	if updatedPath != "C:/projects/pac" {
+		t.Fatalf("expected C:/projects/pac from OSC 9;9, got %s", updatedPath)
+	}
+
+	// Windows OSC 0 title
+	winTitle := []byte("\x1b]0;Administrator: C:\\Users\\Administrator\x07")
+	tracker.FeedBytes(winTitle)
+	if updatedPath != "C:/Users/Administrator" {
+		t.Fatalf("expected C:/Users/Administrator from OSC 0 title, got %s", updatedPath)
+	}
+
+	// Windows OSC 7 with file:///C:/Users/tech
+	winOsc7 := []byte("\x1b]7;file:///C:/Users/tech\x07")
+	tracker.FeedBytes(winOsc7)
+	if updatedPath != "C:/Users/tech" {
+		t.Fatalf("expected C:/Users/tech from OSC 7, got %s", updatedPath)
+	}
 }
 
 func TestLocalClient(t *testing.T) {

@@ -20,12 +20,14 @@ import (
 )
 
 const (
-	SFTPColName  = 0
-	SFTPColSize  = 1
-	SFTPColTime  = 2
-	SFTPColMode  = 3
-	SFTPColIsDir = 4
-	SFTPColIcon  = 5
+	SFTPColName    = 0
+	SFTPColSize    = 1
+	SFTPColTime    = 2
+	SFTPColMode    = 3
+	SFTPColIsDir   = 4
+	SFTPColIcon    = 5
+	SFTPColRawSize = 6
+	SFTPColRawTime = 7
 )
 
 // SFTPPanel represents the MobaXterm-style SFTP file browser panel
@@ -59,6 +61,7 @@ type SFTPPanel struct {
 	TreeView      *gtk.TreeView
 	ListStore     *gtk.ListStore
 	ProgressBar   *gtk.ProgressBar
+	CancelBtn     *gtk.Button
 	ProgressBox   *gtk.Box
 	StatusLabel   *gtk.Label
 	UploadBtn     *gtk.Button
@@ -117,8 +120,96 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 
 	box.PackStart(topBox, false, false, 0)
 
-	// File List TreeView: Name, Size, ModTime, Mode, IsDir, Icon
-	listStore, _ := gtk.ListStoreNew(glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_STRING, glib.TYPE_BOOLEAN, glib.TYPE_STRING)
+	// File List TreeView: Name, Size, ModTime, Mode, IsDir, Icon, RawSize, RawTime
+	listStore, _ := gtk.ListStoreNew(
+		glib.TYPE_STRING,  // SFTPColName
+		glib.TYPE_STRING,  // SFTPColSize
+		glib.TYPE_STRING,  // SFTPColTime
+		glib.TYPE_STRING,  // SFTPColMode
+		glib.TYPE_BOOLEAN, // SFTPColIsDir
+		glib.TYPE_STRING,  // SFTPColIcon
+		glib.TYPE_INT64,   // SFTPColRawSize
+		glib.TYPE_INT64,   // SFTPColRawTime
+	)
+
+	// Configure sort functions: folders always grouped at the top!
+	listStore.SetSortFunc(SFTPColName, func(model *gtk.TreeModel, a, b *gtk.TreeIter) int {
+		vDirA, _ := model.GetValue(a, SFTPColIsDir)
+		vDirB, _ := model.GetValue(b, SFTPColIsDir)
+		isDirA, _ := vDirA.GoValue()
+		isDirB, _ := vDirB.GoValue()
+		if isDirA.(bool) && !isDirB.(bool) {
+			return -1
+		}
+		if !isDirA.(bool) && isDirB.(bool) {
+			return 1
+		}
+		vNameA, _ := model.GetValue(a, SFTPColName)
+		vNameB, _ := model.GetValue(b, SFTPColName)
+		nA, _ := vNameA.GetString()
+		nB, _ := vNameB.GetString()
+		return strings.Compare(strings.ToLower(nA), strings.ToLower(nB))
+	})
+
+	listStore.SetSortFunc(SFTPColSize, func(model *gtk.TreeModel, a, b *gtk.TreeIter) int {
+		vDirA, _ := model.GetValue(a, SFTPColIsDir)
+		vDirB, _ := model.GetValue(b, SFTPColIsDir)
+		isDirA, _ := vDirA.GoValue()
+		isDirB, _ := vDirB.GoValue()
+		if isDirA.(bool) && !isDirB.(bool) {
+			return -1
+		}
+		if !isDirA.(bool) && isDirB.(bool) {
+			return 1
+		}
+		if isDirA.(bool) && isDirB.(bool) {
+			vNameA, _ := model.GetValue(a, SFTPColName)
+			vNameB, _ := model.GetValue(b, SFTPColName)
+			nA, _ := vNameA.GetString()
+			nB, _ := vNameB.GetString()
+			return strings.Compare(strings.ToLower(nA), strings.ToLower(nB))
+		}
+		vSizeA, _ := model.GetValue(a, SFTPColRawSize)
+		vSizeB, _ := model.GetValue(b, SFTPColRawSize)
+		sA, _ := vSizeA.GoValue()
+		sB, _ := vSizeB.GoValue()
+		rawA := sA.(int64)
+		rawB := sB.(int64)
+		if rawA < rawB {
+			return -1
+		} else if rawA > rawB {
+			return 1
+		}
+		return 0
+	})
+
+	listStore.SetSortFunc(SFTPColTime, func(model *gtk.TreeModel, a, b *gtk.TreeIter) int {
+		vDirA, _ := model.GetValue(a, SFTPColIsDir)
+		vDirB, _ := model.GetValue(b, SFTPColIsDir)
+		isDirA, _ := vDirA.GoValue()
+		isDirB, _ := vDirB.GoValue()
+		if isDirA.(bool) && !isDirB.(bool) {
+			return -1
+		}
+		if !isDirA.(bool) && isDirB.(bool) {
+			return 1
+		}
+		vTimeA, _ := model.GetValue(a, SFTPColRawTime)
+		vTimeB, _ := model.GetValue(b, SFTPColRawTime)
+		tA, _ := vTimeA.GoValue()
+		tB, _ := vTimeB.GoValue()
+		rawA := tA.(int64)
+		rawB := tB.(int64)
+		if rawA < rawB {
+			return -1
+		} else if rawA > rawB {
+			return 1
+		}
+		return 0
+	})
+
+	listStore.SetSortColumnId(SFTPColName, gtk.SORT_ASCENDING)
+
 	treeView, _ := gtk.TreeViewNewWithModel(listStore)
 	treeView.SetHeadersVisible(true)
 	if sel, err := treeView.GetSelection(); err == nil {
@@ -130,6 +221,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	colName.SetTitle(i18n.T("Имя", "Name"))
 	colName.SetResizable(true)
 	colName.SetExpand(true)
+	colName.SetSortColumnID(SFTPColName)
 	rPixbuf, _ := gtk.CellRendererPixbufNew()
 	rName, _ := gtk.CellRendererTextNew()
 	colName.PackStart(rPixbuf, false)
@@ -144,6 +236,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	colSize, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Размер", "Size"), rSize, "text", SFTPColSize)
 	colSize.SetResizable(true)
 	colSize.SetMinWidth(30)
+	colSize.SetSortColumnID(SFTPColSize)
 	treeView.AppendColumn(colSize)
 
 	// Column: ModTime (Дата изменения)
@@ -151,6 +244,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	colTime, _ := gtk.TreeViewColumnNewWithAttribute(i18n.T("Дата изменения", "Date Modified"), rTime, "text", SFTPColTime)
 	colTime.SetResizable(true)
 	colTime.SetMinWidth(30)
+	colTime.SetSortColumnID(SFTPColTime)
 	treeView.AppendColumn(colTime)
 
 	// Scrolled container
@@ -172,7 +266,22 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	progressBox.PackStart(statusLabel, false, false, 0)
 
 	pBar, _ := gtk.ProgressBarNew()
-	progressBox.PackStart(pBar, false, false, 0)
+	pBar.SetHExpand(true)
+
+	cancelBtn, _ := gtk.ButtonNew()
+	cancelBtn.SetTooltipText(i18n.T("Отменить передачу", "Cancel transfer"))
+	cancelBtn.SetRelief(gtk.RELIEF_NONE)
+	cancelLbl, _ := gtk.LabelNew("")
+	cancelLbl.SetMarkup("<span color='#e74c3c' font_weight='bold'>✕</span>")
+	cancelBtn.Add(cancelLbl)
+	cancelBtn.SetNoShowAll(true)
+	cancelBtn.SetVisible(false)
+
+	pBarBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
+	pBarBox.PackStart(pBar, true, true, 0)
+	pBarBox.PackStart(cancelBtn, false, false, 0)
+
+	progressBox.PackStart(pBarBox, false, false, 0)
 	box.PackEnd(progressBox, false, false, 0)
 
 	panel := &SFTPPanel{
@@ -181,6 +290,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		TreeView:    treeView,
 		ListStore:   listStore,
 		ProgressBar: pBar,
+		CancelBtn:   cancelBtn,
 		ProgressBox: progressBox,
 		StatusLabel: statusLabel,
 		UploadBtn:   uploadBtn,
@@ -188,6 +298,10 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		watcherMgr:  watcherMgr,
 		sessions:    make(map[string]*SessionSFTPData),
 	}
+
+	cancelBtn.Connect("clicked", func() {
+		panel.CancelActiveTransfer()
+	})
 
 	// Setup Drag and Drop: internal moving into folders + external upload from desktop/file manager
 	targetURI, _ := gtk.TargetEntryNew("text/uri-list", 0, 1)
@@ -263,13 +377,13 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 			if targetFolder == "" || targetFolder == "." || targetFolder == ".." {
 				return
 			}
-			destDir := filepath.Join(panel.client.CurrentDir(), targetFolder)
+			destDir := joinRemotePath(panel.client.CurrentDir(), targetFolder)
 			lines := strings.Split(text, "\n")
 			for _, l := range lines {
 				fName := strings.TrimSpace(l)
 				if fName != "" && fName != targetFolder {
-					oldPath := filepath.Join(panel.client.CurrentDir(), fName)
-					newPath := filepath.Join(destDir, fName)
+					oldPath := joinRemotePath(panel.client.CurrentDir(), fName)
+					newPath := joinRemotePath(destDir, fName)
 					_ = panel.client.Rename(oldPath, newPath)
 				}
 			}
@@ -290,11 +404,11 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		isDir, _ := isDirVal.(bool)
 
 		if isDir {
-			newPath := filepath.Join(panel.client.CurrentDir(), nameStr)
+			newPath := joinRemotePath(panel.client.CurrentDir(), nameStr)
 			panel.LoadDirectory(newPath)
 		} else {
 			// Remote Edit
-			remoteFilePath := filepath.Join(panel.client.CurrentDir(), nameStr)
+			remoteFilePath := joinRemotePath(panel.client.CurrentDir(), nameStr)
 			panel.triggerRemoteEdit(remoteFilePath)
 		}
 	})
@@ -349,7 +463,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	// Top toolbar button actions
 	upBtn.Connect("clicked", func() {
 		if panel.client != nil {
-			parentDir := filepath.Dir(panel.client.CurrentDir())
+			parentDir := parentOf(panel.client.CurrentDir())
 			panel.LoadDirectory(parentDir)
 		}
 	})
@@ -406,6 +520,8 @@ func (sp *SFTPPanel) populateStore(items []sftp.FileItem) {
 		_ = sp.ListStore.SetValue(iter, SFTPColMode, item.Mode.String())
 		_ = sp.ListStore.SetValue(iter, SFTPColIsDir, item.IsDir)
 		_ = sp.ListStore.SetValue(iter, SFTPColIcon, icon)
+		_ = sp.ListStore.SetValue(iter, SFTPColRawSize, item.Size)
+		_ = sp.ListStore.SetValue(iter, SFTPColRawTime, item.ModTime.Unix())
 	}
 
 	sp.TreeView.SetModel(sp.ListStore)
@@ -432,6 +548,7 @@ func (sp *SFTPPanel) AttachClient(sessionID, hostID string, client *sftp.Client,
 		sp.TreeView.SetModel(sp.ListStore)
 		sp.PathEntry.SetText("")
 		sp.ProgressBar.SetFraction(0.0)
+		sp.CancelBtn.SetVisible(false)
 		sp.StatusLabel.SetText(i18n.T("Готово", "Ready"))
 		return
 	}
@@ -458,8 +575,10 @@ func (sp *SFTPPanel) AttachClient(sessionID, hostID string, client *sftp.Client,
 	if sData.Transfer.IsTransferring {
 		sp.ProgressBar.SetFraction(sData.Transfer.Fraction)
 		sp.StatusLabel.SetText(sData.Transfer.StatusText)
+		sp.CancelBtn.SetVisible(true)
 	} else {
 		sp.ProgressBar.SetFraction(0.0)
+		sp.CancelBtn.SetVisible(false)
 		if sData.LastStatus != "" {
 			sp.StatusLabel.SetText(sData.LastStatus)
 		} else if len(sData.Items) > 0 {
@@ -613,7 +732,7 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 	}
 
 	fileName := filepath.Base(localPath)
-	remoteDest := filepath.Join(client.CurrentDir(), fileName)
+	remoteDest := joinRemotePath(client.CurrentDir(), fileName)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sData.Transfer = SessionTransferState{
@@ -628,6 +747,7 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 
 	sp.StatusLabel.SetText(i18n.T("Выгрузка: ", "Uploading: ") + fileName)
 	sp.ProgressBar.SetFraction(0.0)
+	sp.CancelBtn.SetVisible(true)
 
 	go func() {
 		err := client.UploadFile(ctx, localPath, remoteDest, func(transferred, total int64, speed float64) {
@@ -687,6 +807,7 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 
 			if isCurrent {
 				sp.ProgressBar.SetFraction(0.0)
+				sp.CancelBtn.SetVisible(false)
 				sp.StatusLabel.SetText(finalStatus)
 				if err == nil {
 					sp.LoadDirectory(client.CurrentDir())
@@ -739,7 +860,7 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 
 	valName, _ := sp.ListStore.GetValue(iter, SFTPColName)
 	nameStr, _ := valName.GetString()
-	remotePath := filepath.Join(client.CurrentDir(), nameStr)
+	remotePath := joinRemotePath(client.CurrentDir(), nameStr)
 
 	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
 		i18n.T("Сохранить файл на локальный компьютер", "Save file to local computer"),
@@ -769,6 +890,7 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 
 		sp.StatusLabel.SetText(i18n.T("Скачивание: ", "Downloading: ") + nameStr)
 		sp.ProgressBar.SetFraction(0.0)
+		sp.CancelBtn.SetVisible(true)
 
 		go func() {
 			err := client.DownloadFile(ctx, remotePath, localPath, func(transferred, total int64, speed float64) {
@@ -828,6 +950,7 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 
 				if isCurrent {
 					sp.ProgressBar.SetFraction(0.0)
+					sp.CancelBtn.SetVisible(false)
 					sp.StatusLabel.SetText(finalStatus)
 					if err != nil && err != context.Canceled {
 						sp.showError(i18n.T("Ошибка загрузки файла", "Download Error"),
@@ -878,7 +1001,7 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 	if dlg.Run() == gtk.RESPONSE_OK {
 		folderName, _ := entry.GetText()
 		if folderName != "" {
-			newPath := filepath.Join(sp.client.CurrentDir(), folderName)
+			newPath := joinRemotePath(sp.client.CurrentDir(), folderName)
 			err := sp.client.Mkdir(newPath)
 			if err == nil {
 				sp.LoadDirectory(sp.client.CurrentDir())
@@ -897,7 +1020,7 @@ func (sp *SFTPPanel) showRenameDialog(oldName string) {
 		return
 	}
 
-	oldPath := filepath.Join(sp.client.CurrentDir(), oldName)
+	oldPath := joinRemotePath(sp.client.CurrentDir(), oldName)
 
 	dlg, _ := gtk.DialogNew()
 	dlg.SetTitle(i18n.T("Переименовать файл / папку", "Rename File / Folder"))
@@ -932,7 +1055,7 @@ func (sp *SFTPPanel) showRenameDialog(oldName string) {
 	if dlg.Run() == gtk.RESPONSE_OK {
 		newName, _ := entry.GetText()
 		if newName != "" && newName != oldName {
-			newPath := filepath.Join(sp.client.CurrentDir(), newName)
+			newPath := joinRemotePath(sp.client.CurrentDir(), newName)
 			err := sp.client.Rename(oldPath, newPath)
 			if err == nil {
 				sp.LoadDirectory(sp.client.CurrentDir())
@@ -967,7 +1090,7 @@ func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
 			isCurrent := (sp.currentSessID == sessionID)
 			sp.sessMu.Unlock()
 			if isCurrent {
-				sp.StatusLabel.SetText(i18n.T("Сохранение на сервер: ", "Saving to server: ") + filepath.Base(remPath))
+				sp.StatusLabel.SetText(i18n.T("Сохранение на сервер: ", "Saving to server: ") + remoteBaseName(remPath))
 			}
 		})
 		err := sp.client.UploadFile(ctx, localPath, remPath, nil)
@@ -977,7 +1100,7 @@ func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
 			sp.sessMu.Unlock()
 			if isCurrent {
 				if err == nil {
-					sp.StatusLabel.SetText(i18n.T("Файл сохранен: ", "File saved: ") + filepath.Base(remPath))
+					sp.StatusLabel.SetText(i18n.T("Файл сохранен: ", "File saved: ") + remoteBaseName(remPath))
 				} else {
 					sp.StatusLabel.SetText(i18n.T("Ошибка сохранения: ", "Save error: ") + err.Error())
 				}
@@ -1009,7 +1132,7 @@ func (sp *SFTPPanel) getSelectedFiles() []sftpSelectedFile {
 		isDirVal, _ := valIsDir.GoValue()
 		isDir, _ := isDirVal.(bool)
 		if nameStr != "" && sp.client != nil {
-			remotePath := filepath.Join(sp.client.CurrentDir(), nameStr)
+			remotePath := joinRemotePath(sp.client.CurrentDir(), nameStr)
 			files = append(files, sftpSelectedFile{
 				name:  nameStr,
 				isDir: isDir,
@@ -1126,6 +1249,7 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 
 		sp.StatusLabel.SetText(i18n.T("Скачивание файлов...", "Downloading files..."))
 		sp.ProgressBar.SetFraction(0.0)
+		sp.CancelBtn.SetVisible(true)
 
 		go func() {
 			var nonDirFiles []sftpSelectedFile
@@ -1136,10 +1260,8 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 			}
 			totalCount := len(nonDirFiles)
 			for i, f := range nonDirFiles {
-				select {
-				case <-ctx.Done():
+				if ctx.Err() != nil {
 					break
-				default:
 				}
 				localDest := filepath.Join(targetDir, f.name)
 				statusText := fmt.Sprintf("%s (%d/%d): %s",
@@ -1167,20 +1289,25 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 			}
 
 			glib.IdleAdd(func() {
+				finalStatus := i18n.T("Скачивание завершено", "Download completed")
+				if ctx.Err() != nil {
+					finalStatus = i18n.T("Скачивание отменено", "Download canceled")
+				}
 				sp.sessMu.Lock()
 				if sd, ok := sp.sessions[sessionID]; ok {
 					sd.Transfer.IsTransferring = false
 					sd.Transfer.Fraction = 0.0
 					sd.Transfer.StatusText = ""
 					sd.Transfer.CancelFunc = nil
-					sd.LastStatus = i18n.T("Скачивание завершено", "Download completed")
+					sd.LastStatus = finalStatus
 				}
 				isCurrent := (sp.currentSessID == sessionID)
 				sp.sessMu.Unlock()
 
 				if isCurrent {
 					sp.ProgressBar.SetFraction(0.0)
-					sp.StatusLabel.SetText(i18n.T("Скачивание завершено", "Download completed"))
+					sp.CancelBtn.SetVisible(false)
+					sp.StatusLabel.SetText(finalStatus)
 				}
 			})
 		}()
@@ -1238,7 +1365,7 @@ func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 	isDirVal, _ := valIsDir.GoValue()
 	isDir, _ := isDirVal.(bool)
 
-	remotePath := filepath.Join(sp.client.CurrentDir(), nameStr)
+	remotePath := joinRemotePath(sp.client.CurrentDir(), nameStr)
 
 	menu, _ := gtk.MenuNew()
 
@@ -1350,3 +1477,77 @@ func (p *SFTPPanel) UpdateTheme(isDark bool) {
 		p.DownloadBtn.ShowAll()
 	}
 }
+
+// CancelActiveTransfer cancels any ongoing file transfer for the active session.
+func (sp *SFTPPanel) CancelActiveTransfer() {
+	sp.sessMu.Lock()
+	sessionID := sp.currentSessID
+	sData := sp.sessions[sessionID]
+	var cancelFn context.CancelFunc
+	if sData != nil && sData.Transfer.IsTransferring {
+		cancelFn = sData.Transfer.CancelFunc
+	}
+	sp.sessMu.Unlock()
+
+	if cancelFn != nil {
+		cancelFn()
+	}
+}
+
+func normalizeRemotePath(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	return p
+}
+
+func joinRemotePath(base, elem string) string {
+	base = normalizeRemotePath(strings.TrimSpace(base))
+	elem = strings.Trim(strings.ReplaceAll(elem, "\\", "/"), "/")
+	if base == "" {
+		return elem
+	}
+	if elem == "" {
+		return base
+	}
+	if strings.HasSuffix(base, "/") {
+		return base + elem
+	}
+	return base + "/" + elem
+}
+
+func parentOf(dir string) string {
+	dir = normalizeRemotePath(strings.TrimSpace(dir))
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" || dir == "/" {
+		return "/"
+	}
+	// Check Windows drive root like "C:"
+	if len(dir) == 2 && dir[1] == ':' {
+		return dir + "/"
+	}
+	idx := strings.LastIndex(dir, "/")
+	if idx == -1 {
+		return "/"
+	}
+	if idx == 0 {
+		return "/"
+	}
+	parent := dir[:idx]
+	if len(parent) == 2 && parent[1] == ':' {
+		return parent + "/"
+	}
+	return parent
+}
+
+func remoteBaseName(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimRight(p, "/")
+	idx := strings.LastIndex(p, "/")
+	if idx != -1 {
+		return p[idx+1:]
+	}
+	return p
+}
+
