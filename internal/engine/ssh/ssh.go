@@ -223,7 +223,9 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 	// Start Port Forwardings
 	fwdMgr := NewForwardManager(client)
 	if len(host.PortForwards) > 0 {
-		_ = fwdMgr.StartForwardings(host.PortForwards)
+		if err := fwdMgr.StartForwardings(host.PortForwards); err != nil {
+			log.Printf("[SSH] Warning: port forwarding failed for host %s: %v", host.Name, err)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

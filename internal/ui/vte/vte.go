@@ -55,25 +55,84 @@ static void reset_terminal_state(VteTerminal* term) {
     vte_terminal_feed(term, reset_seq, strlen(reset_seq));
 }
 
+static void vte_apply_font_scale(VteTerminal* term, gdouble scale) {
+    if (!term) return;
+    if (scale < 0.2) scale = 0.2;
+    if (scale > 5.0) scale = 5.0;
+
+    PangoFontDescription* base_desc = (PangoFontDescription*)g_object_get_data(G_OBJECT(term), "pac-base-font");
+    if (!base_desc) {
+        const PangoFontDescription* cur = vte_terminal_get_font(term);
+        if (cur) {
+            base_desc = pango_font_description_copy(cur);
+            g_object_set_data_full(G_OBJECT(term), "pac-base-font", base_desc, (GDestroyNotify)pango_font_description_free);
+        }
+    }
+
+    if (base_desc) {
+        PangoFontDescription* scaled = pango_font_description_copy(base_desc);
+        int base_size = pango_font_description_get_size(base_desc);
+        if (base_size <= 0) {
+            base_size = 11 * PANGO_SCALE;
+        }
+        int new_size = (int)(base_size * scale + 0.5);
+        if (pango_font_description_get_size_is_absolute(base_desc)) {
+            pango_font_description_set_absolute_size(scaled, new_size);
+        } else {
+            pango_font_description_set_size(scaled, new_size);
+        }
+        vte_terminal_set_font(term, scaled);
+        pango_font_description_free(scaled);
+    }
+
+    vte_terminal_set_font_scale(term, scale);
+
+    gdouble* pscale = (gdouble*)g_object_get_data(G_OBJECT(term), "pac-font-scale");
+    if (!pscale) {
+        pscale = g_new(gdouble, 1);
+        g_object_set_data_full(G_OBJECT(term), "pac-font-scale", pscale, g_free);
+    }
+    *pscale = scale;
+}
+
+static gdouble vte_get_applied_font_scale(VteTerminal* term) {
+    if (!term) return 1.0;
+    gdouble* pscale = (gdouble*)g_object_get_data(G_OBJECT(term), "pac-font-scale");
+    if (pscale) return *pscale;
+    return vte_terminal_get_font_scale(term);
+}
+
+static void vte_set_base_font(VteTerminal* term, const PangoFontDescription* desc) {
+    if (!term || !desc) return;
+    PangoFontDescription* copy = pango_font_description_copy(desc);
+    g_object_set_data_full(G_OBJECT(term), "pac-base-font", copy, (GDestroyNotify)pango_font_description_free);
+    gdouble scale = vte_get_applied_font_scale(term);
+    vte_apply_font_scale(term, scale);
+}
+
 static void vte_zoom_in(VteTerminal* term) {
     if (!term) return;
-    gdouble scale = vte_terminal_get_font_scale(term);
-    scale *= 1.1;
-    if (scale > 5.0) scale = 5.0;
-    vte_terminal_set_font_scale(term, scale);
+    gdouble scale = vte_get_applied_font_scale(term);
+    vte_apply_font_scale(term, scale * 1.15);
 }
 
 static void vte_zoom_out(VteTerminal* term) {
     if (!term) return;
-    gdouble scale = vte_terminal_get_font_scale(term);
-    scale /= 1.1;
-    if (scale < 0.2) scale = 0.2;
-    vte_terminal_set_font_scale(term, scale);
+    gdouble scale = vte_get_applied_font_scale(term);
+    vte_apply_font_scale(term, scale / 1.15);
 }
 
 static void vte_zoom_reset(VteTerminal* term) {
     if (!term) return;
-    vte_terminal_set_font_scale(term, 1.0);
+    vte_apply_font_scale(term, 1.0);
+}
+
+static void on_vte_increase_font_size(VteTerminal* term, gpointer user_data) {
+    vte_zoom_in(term);
+}
+
+static void on_vte_decrease_font_size(VteTerminal* term, gpointer user_data) {
+    vte_zoom_out(term);
 }
 
 static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
@@ -113,38 +172,53 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
         return TRUE;
     }
 
+    // Strip lock modifiers (NumLock GDK_MOD2_MASK, CapsLock, ScrollLock)
+    GdkModifierType state = event->state & gtk_accelerator_get_default_mod_mask();
+
+    guint latin_keyval = event->keyval;
+    GdkKeymap* keymap = gdk_keymap_get_default();
+    if (keymap) {
+        gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, state, 0, &latin_keyval, NULL, NULL, NULL);
+    }
+
     // Ctrl+Shift+V or Shift+Insert: Paste from clipboard with native bracketed paste support
-    if (((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_v)) ||
-        ((event->state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_Insert || event->keyval == GDK_KEY_KP_Insert))) {
+    if (((state & GDK_CONTROL_MASK) && (state & GDK_SHIFT_MASK) && 
+         (event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_v || latin_keyval == GDK_KEY_V || latin_keyval == GDK_KEY_v)) ||
+        ((state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_Insert || event->keyval == GDK_KEY_KP_Insert))) {
         paste_clean_text(VTE_TERMINAL(widget), GDK_SELECTION_CLIPBOARD);
         return TRUE;
     }
 
     // Ctrl+Shift+C: Copy selected text to clipboard
-    if ((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK) && (event->keyval == GDK_KEY_C || event->keyval == GDK_KEY_c)) {
+    if ((state & GDK_CONTROL_MASK) && (state & GDK_SHIFT_MASK) && 
+        (event->keyval == GDK_KEY_C || event->keyval == GDK_KEY_c || latin_keyval == GDK_KEY_C || latin_keyval == GDK_KEY_c)) {
         vte_terminal_copy_clipboard_format(VTE_TERMINAL(widget), VTE_FORMAT_TEXT);
         return TRUE;
     }
 
     // Ctrl+Shift+R or Ctrl+Shift+K: Reset terminal state (clears stuck bracketed paste and mouse modes)
-    if ((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK) && 
-        (event->keyval == GDK_KEY_R || event->keyval == GDK_KEY_r || event->keyval == GDK_KEY_K || event->keyval == GDK_KEY_k)) {
+    if ((state & GDK_CONTROL_MASK) && (state & GDK_SHIFT_MASK) && 
+        (event->keyval == GDK_KEY_R || event->keyval == GDK_KEY_r || event->keyval == GDK_KEY_K || event->keyval == GDK_KEY_k ||
+         latin_keyval == GDK_KEY_R || latin_keyval == GDK_KEY_r || latin_keyval == GDK_KEY_K || latin_keyval == GDK_KEY_k)) {
         reset_terminal_state(VTE_TERMINAL(widget));
         return TRUE;
     }
 
     // Font Zoom Controls (like mate-terminal / gnome-terminal: Ctrl++, Ctrl+-, Ctrl+0)
-    if (event->state & GDK_CONTROL_MASK) {
+    if (state & GDK_CONTROL_MASK) {
         guint kv = event->keyval;
-        if (kv == GDK_KEY_plus || kv == GDK_KEY_equal || kv == GDK_KEY_KP_Add) {
+        guint lkv = latin_keyval;
+        if (kv == GDK_KEY_plus || kv == GDK_KEY_equal || kv == GDK_KEY_KP_Add ||
+            lkv == GDK_KEY_plus || lkv == GDK_KEY_equal || lkv == GDK_KEY_KP_Add) {
             vte_zoom_in(VTE_TERMINAL(widget));
             return TRUE;
         }
-        if (kv == GDK_KEY_minus || kv == GDK_KEY_underscore || kv == GDK_KEY_KP_Subtract) {
+        if (kv == GDK_KEY_minus || kv == GDK_KEY_underscore || kv == GDK_KEY_KP_Subtract ||
+            lkv == GDK_KEY_minus || lkv == GDK_KEY_underscore || lkv == GDK_KEY_KP_Subtract) {
             vte_zoom_out(VTE_TERMINAL(widget));
             return TRUE;
         }
-        if (kv == GDK_KEY_0 || kv == GDK_KEY_KP_0) {
+        if (kv == GDK_KEY_0 || kv == GDK_KEY_KP_0 || lkv == GDK_KEY_0 || lkv == GDK_KEY_KP_0) {
             vte_zoom_reset(VTE_TERMINAL(widget));
             return TRUE;
         }
@@ -152,7 +226,7 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
 
     // Pass all other keys cleanly to VTE without client interception
     // If Control or Alt is pressed, let standard terminal key combinations pass through to VTE
-    if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_MOD1_MASK)) {
+    if ((state & GDK_CONTROL_MASK) || (state & GDK_MOD1_MASK)) {
         return FALSE;
     }
 
@@ -172,8 +246,9 @@ static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer
 }
 
 static gboolean on_vte_scroll_event(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
-    // Intercept Ctrl + Mouse Wheel for font zoom (mate-terminal style)
-    if (event && (event->state & GDK_CONTROL_MASK)) {
+    if (!event) return FALSE;
+    GdkModifierType state = event->state & gtk_accelerator_get_default_mod_mask();
+    if (state & GDK_CONTROL_MASK) {
         if (event->direction == GDK_SCROLL_UP) {
             vte_zoom_in(VTE_TERMINAL(widget));
             return TRUE;
@@ -183,10 +258,10 @@ static gboolean on_vte_scroll_event(GtkWidget* widget, GdkEventScroll* event, gp
         } else if (event->direction == GDK_SCROLL_SMOOTH) {
             gdouble dx = 0, dy = 0;
             if (gdk_event_get_scroll_deltas((GdkEvent*)event, &dx, &dy)) {
-                if (dy < 0) {
+                if (dy < -0.01) {
                     vte_zoom_in(VTE_TERMINAL(widget));
                     return TRUE;
-                } else if (dy > 0) {
+                } else if (dy > 0.01) {
                     vte_zoom_out(VTE_TERMINAL(widget));
                     return TRUE;
                 }
@@ -232,6 +307,8 @@ static void configure_vte_terminal(GtkWidget* w) {
     g_signal_connect(w, "button-press-event", G_CALLBACK(on_vte_button_press), NULL);
     g_signal_connect(w, "scroll-event", G_CALLBACK(on_vte_scroll_event), NULL);
     g_signal_connect(w, "motion-notify-event", G_CALLBACK(on_vte_motion_notify), NULL);
+    g_signal_connect(w, "increase-font-size", G_CALLBACK(on_vte_increase_font_size), NULL);
+    g_signal_connect(w, "decrease-font-size", G_CALLBACK(on_vte_decrease_font_size), NULL);
     g_signal_connect(w, "current-directory-uri-changed", G_CALLBACK(on_vte_directory_uri_changed), NULL);
     g_signal_connect(w, "window-title-changed", G_CALLBACK(on_vte_window_title_changed), NULL);
     g_signal_connect(w, "contents-changed", G_CALLBACK(on_vte_contents_changed), NULL);
@@ -675,7 +752,7 @@ func (t *Terminal) SetFont(fontDesc string) {
 
 	pangoDesc := C.pango_font_description_from_string(cFont)
 	if pangoDesc != nil {
-		C.vte_terminal_set_font(t.vteTerm, pangoDesc)
+		C.vte_set_base_font(t.vteTerm, pangoDesc)
 		C.pango_font_description_free(pangoDesc)
 	}
 }
@@ -768,7 +845,7 @@ func (t *Terminal) ZoomReset() {
 // GetFontScale returns current font scale factor
 func (t *Terminal) GetFontScale() float64 {
 	if t.vteTerm != nil {
-		return float64(C.vte_terminal_get_font_scale(t.vteTerm))
+		return float64(C.vte_get_applied_font_scale(t.vteTerm))
 	}
 	return 1.0
 }
@@ -776,12 +853,7 @@ func (t *Terminal) GetFontScale() float64 {
 // SetFontScale sets font scale factor clamped to [0.2, 5.0]
 func (t *Terminal) SetFontScale(scale float64) {
 	if t.vteTerm != nil {
-		if scale < 0.2 {
-			scale = 0.2
-		} else if scale > 5.0 {
-			scale = 5.0
-		}
-		C.vte_terminal_set_font_scale(t.vteTerm, C.gdouble(scale))
+		C.vte_apply_font_scale(t.vteTerm, C.gdouble(scale))
 	}
 }
 

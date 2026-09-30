@@ -1757,6 +1757,8 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 
 				bridge := pty.FromSlave(slaveFile)
 				go func() {
+					_ = sess.Close()
+					app.manager.Unregister(sess.ID)
 					jumpClient := app.resolveJumpClient(host)
 					newSess, err := session.StartSessionWithBridge(context.Background(), host, tabTitle, app.settings.DefaultLogsDir, bridge, jumpClient)
 					glib.IdleAdd(func() {
@@ -1768,8 +1770,6 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 							return
 						}
 
-						oldID := sess.ID
-						app.manager.Unregister(oldID)
 						app.manager.Register(newSess)
 
 						app.TabView.UpdateSessionForTerminal(term, newSess)
