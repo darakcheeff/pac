@@ -31,6 +31,7 @@ type SSHSession struct {
 	closed            bool
 	keepAliveInterval time.Duration
 	keepAliveCountMax int
+	isROSSSH          bool
 	OnExit            func(err error)
 }
 
@@ -228,6 +229,12 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		}
 	}
 
+	serverVer := string(client.ServerVersion())
+	isROSSSH := strings.Contains(strings.ToUpper(serverVer), "ROSSSH")
+	if isROSSSH {
+		log.Printf("[SSH] Detected MikroTik RouterOS (%s); skipping application-level keepalive to avoid SSH_MSG_UNIMPLEMENTED disconnects (TCP keepalive is active)", serverVer)
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	s := &SSHSession{
 		client:            client,
@@ -238,12 +245,7 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		cancel:            cancel,
 		keepAliveInterval: keepAliveDur,
 		keepAliveCountMax: keepAliveMax,
-	}
-
-	serverVer := string(client.ServerVersion())
-	isROSSSH := strings.Contains(strings.ToUpper(serverVer), "ROSSSH")
-	if isROSSSH {
-		log.Printf("[SSH] Detected MikroTik RouterOS (%s); skipping application-level keepalive to avoid SSH_MSG_UNIMPLEMENTED disconnects (TCP keepalive is active)", serverVer)
+		isROSSSH:          isROSSSH,
 	}
 
 	// Monitor remote session exit
@@ -269,6 +271,11 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 	}
 
 	return s, nil
+}
+
+// IsROSSSH reports whether the remote SSH server is MikroTik RouterOS (ROSSSH)
+func (s *SSHSession) IsROSSSH() bool {
+	return s.isROSSSH
 }
 
 // WindowChange sends terminal resize signal to remote host

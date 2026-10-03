@@ -191,8 +191,8 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			}
 		}
 
-		// Auto SFTP subsystem
-		if host.AutoSFTP {
+		// Auto SFTP subsystem (skipped on MikroTik RouterOS where SFTP subsystem request terminates the connection)
+		if host.AutoSFTP && !sshSess.IsROSSSH() {
 			if sftpCl, err := sftp.NewClient(sshSess.Client()); err == nil {
 				sess.SFTPClient = sftpCl
 				sess.Tracker.SetHomeDir(sftpCl.CurrentDir())
