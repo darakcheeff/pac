@@ -337,22 +337,24 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		}
 
 		if len(uris) > 0 {
-			for _, uStr := range uris {
-				uStr = strings.TrimSpace(uStr)
-				if uStr == "" {
-					continue
+			glib.IdleAdd(func() {
+				for _, uStr := range uris {
+					uStr = strings.TrimSpace(uStr)
+					if uStr == "" {
+						continue
+					}
+					u, err := url.Parse(uStr)
+					localPath := ""
+					if err == nil && u.Path != "" {
+						localPath = filepath.Clean(u.Path)
+					} else if strings.HasPrefix(uStr, "file://") {
+						localPath = filepath.Clean(strings.TrimPrefix(uStr, "file://"))
+					}
+					if localPath != "" {
+						panel.UploadLocalFile(localPath)
+					}
 				}
-				u, err := url.Parse(uStr)
-				localPath := ""
-				if err == nil && u.Path != "" {
-					localPath = filepath.Clean(u.Path)
-				} else if strings.HasPrefix(uStr, "file://") {
-					localPath = filepath.Clean(strings.TrimPrefix(uStr, "file://"))
-				}
-				if localPath != "" {
-					panel.UploadLocalFile(localPath)
-				}
-			}
+			})
 			return
 		}
 
@@ -378,16 +380,18 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 				return
 			}
 			destDir := joinRemotePath(panel.client.CurrentDir(), targetFolder)
-			lines := strings.Split(text, "\n")
-			for _, l := range lines {
-				fName := strings.TrimSpace(l)
-				if fName != "" && fName != targetFolder {
-					oldPath := joinRemotePath(panel.client.CurrentDir(), fName)
-					newPath := joinRemotePath(destDir, fName)
-					_ = panel.client.Rename(oldPath, newPath)
+			glib.IdleAdd(func() {
+				lines := strings.Split(text, "\n")
+				for _, l := range lines {
+					fName := strings.TrimSpace(l)
+					if fName != "" && fName != targetFolder {
+						oldPath := joinRemotePath(panel.client.CurrentDir(), fName)
+						newPath := joinRemotePath(destDir, fName)
+						_ = panel.client.Rename(oldPath, newPath)
+					}
 				}
-			}
-			panel.LoadDirectory(panel.client.CurrentDir())
+				panel.LoadDirectory(panel.client.CurrentDir())
+			})
 		}
 	})
 
@@ -435,10 +439,25 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 		return false
 	})
 
-	// Right click context menu
+	// Right click context menu and click selection
 	treeView.Connect("button-press-event", func(tv *gtk.TreeView, event *gdk.Event) bool {
 		tv.GrabFocus()
 		btnEvent := gdk.EventButtonNewFromEvent(event)
+		if btnEvent.Button() == gdk.BUTTON_PRIMARY {
+			path, _, _, _, ok := tv.GetPathAtPos(int(btnEvent.X()), int(btnEvent.Y()))
+			if ok && path != nil {
+				if sel, err := tv.GetSelection(); err == nil {
+					if !sel.PathIsSelected(path) {
+						state := btnEvent.State()
+						if (state&uint(gdk.CONTROL_MASK)) == 0 && (state&uint(gdk.SHIFT_MASK)) == 0 {
+							sel.UnselectAll()
+							sel.SelectPath(path)
+						}
+					}
+				}
+			}
+			return false
+		}
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			path, _, _, _, ok := tv.GetPathAtPos(int(btnEvent.X()), int(btnEvent.Y()))
 			if ok && path != nil {

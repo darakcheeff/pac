@@ -320,13 +320,19 @@ func NewTabView() (*TabView, error) {
 			tv.UpdateTabTitle(item)
 
 			if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
-				item.FocusedPane.Terminal.GrabFocus()
+				targetTerm := item.FocusedPane.Terminal
+				glib.IdleAdd(func() {
+					targetTerm.GrabFocus()
+				})
 				tv.lastActiveSession = item.FocusedPane.Session
 				if tv.OnTabChanged != nil {
 					tv.OnTabChanged(item.FocusedPane.Session)
 				}
 			} else if len(item.Panes) > 0 && item.Panes[0].Terminal != nil {
-				item.Panes[0].Terminal.GrabFocus()
+				targetTerm := item.Panes[0].Terminal
+				glib.IdleAdd(func() {
+					targetTerm.GrabFocus()
+				})
 				tv.lastActiveSession = item.Panes[0].Session
 				if tv.OnTabChanged != nil {
 					tv.OnTabChanged(item.Panes[0].Session)

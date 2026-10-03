@@ -640,7 +640,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 			app.restoreMu.Unlock()
 
 			if !restoring && app.settings.AutoRestoreSessions {
-				app.SaveAllSessionState()
+				glib.IdleAdd(func() {
+					app.SaveAllSessionState()
+				})
 			}
 		}
 	}()
