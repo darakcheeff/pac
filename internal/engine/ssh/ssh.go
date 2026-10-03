@@ -40,8 +40,8 @@ func ConnectSSH(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, 
 	return ConnectSSHWithOutput(ctx, host, bridge, bridge.Slave, jumpClient)
 }
 
-// ConnectSSHWithOutput establishes SSH connection and routes stdout/stderr to outputWriter
-func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, outputWriter io.Writer, jumpClient *ssh.Client) (*SSHSession, error) {
+// DialSSH establishes and authenticates an SSH connection based on the host configuration
+func DialSSH(ctx context.Context, host *storage.Host, jumpClient *ssh.Client) (*ssh.Client, agent.ExtendedAgent, error) {
 	authMethods := []ssh.AuthMethod{}
 	var agentClient agent.ExtendedAgent
 
@@ -109,7 +109,7 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 	}
 
 	if len(authMethods) == 0 {
-		return nil, errors.New("no authentication methods available")
+		return nil, nil, errors.New("no authentication methods available")
 	}
 
 	config := &ssh.ClientConfig{
@@ -119,18 +119,12 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		Timeout:         10 * time.Second,
 	}
 
-	var client *ssh.Client
 	targetAddr := fmt.Sprintf("%s:%d", host.Host, host.Port)
 
 	keepAliveSec := host.SSHKeepAliveInterval
 	if keepAliveSec == 0 {
 		keepAliveSec = 15
 	}
-	keepAliveMax := host.SSHKeepAliveCountMax
-	if keepAliveMax == 0 {
-		keepAliveMax = 3
-	}
-
 	keepAliveDur := time.Duration(keepAliveSec) * time.Second
 	if keepAliveSec < 0 {
 		keepAliveDur = 0 // disabled
@@ -142,7 +136,7 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		var err error
 		conn, err = jumpClient.Dial("tcp", targetAddr)
 		if err != nil {
-			return nil, fmt.Errorf("jump host dial failed: %w", err)
+			return nil, nil, fmt.Errorf("jump host dial failed: %w", err)
 		}
 	} else {
 		// Direct dial with TCP keepalive
@@ -153,16 +147,25 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		var err error
 		conn, err = dialer.DialContext(ctx, "tcp", targetAddr)
 		if err != nil {
-			return nil, fmt.Errorf("ssh dial failed: %w", err)
+			return nil, nil, fmt.Errorf("ssh dial failed: %w", err)
 		}
 	}
 
 	ncc, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, config)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("ssh client handshake failed: %w", err)
+		return nil, nil, fmt.Errorf("ssh client handshake failed: %w", err)
 	}
-	client = ssh.NewClient(ncc, chans, reqs)
+	client := ssh.NewClient(ncc, chans, reqs)
+	return client, agentClient, nil
+}
+
+// ConnectSSHWithOutput establishes SSH connection and routes stdout/stderr to outputWriter
+func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.PTYBridge, outputWriter io.Writer, jumpClient *ssh.Client) (*SSHSession, error) {
+	client, agentClient, err := DialSSH(ctx, host, jumpClient)
+	if err != nil {
+		return nil, err
+	}
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -227,6 +230,19 @@ func ConnectSSHWithOutput(ctx context.Context, host *storage.Host, bridge *pty.P
 		if err := fwdMgr.StartForwardings(host.PortForwards); err != nil {
 			log.Printf("[SSH] Warning: port forwarding failed for host %s: %v", host.Name, err)
 		}
+	}
+
+	keepAliveSec := host.SSHKeepAliveInterval
+	if keepAliveSec == 0 {
+		keepAliveSec = 15
+	}
+	keepAliveMax := host.SSHKeepAliveCountMax
+	if keepAliveMax == 0 {
+		keepAliveMax = 3
+	}
+	keepAliveDur := time.Duration(keepAliveSec) * time.Second
+	if keepAliveSec < 0 {
+		keepAliveDur = 0 // disabled
 	}
 
 	serverVer := string(client.ServerVersion())

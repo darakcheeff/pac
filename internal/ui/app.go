@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/darakcheeff/pac/internal/engine/pty"
+	"github.com/darakcheeff/pac/internal/engine/sftp"
 	engineSSH "github.com/darakcheeff/pac/internal/engine/ssh"
 	"github.com/darakcheeff/pac/internal/engine/watcher"
 	"github.com/darakcheeff/pac/internal/i18n"
@@ -1865,6 +1866,27 @@ func promptFolderDialog(parent gtk.IWindow, title, defaultName string) (string, 
 func (app *AppWindow) setupSessionDirectorySync(sess *session.Session, term *vte.Terminal) {
 	if sess == nil {
 		return
+	}
+	sess.OnSFTPReady = func(sftpCl *sftp.Client) {
+		glib.IdleAdd(func() {
+			currTab := app.TabView.GetCurrentTab()
+			if currTab == nil {
+				return
+			}
+			var activeSess *session.Session
+			if currTab.FocusedPane != nil && currTab.FocusedPane.Session != nil {
+				activeSess = currTab.FocusedPane.Session
+			} else {
+				activeSess = currTab.Session
+			}
+			if activeSess == sess {
+				hostID := ""
+				if sess.Host != nil {
+					hostID = sess.Host.ID
+				}
+				app.SFTPPanel.AttachClient(sess.ID, hostID, sftpCl, app.settings.DefaultEditor)
+			}
+		})
 	}
 	if term != nil {
 		term.OnDirectoryChanged = func(path string) {

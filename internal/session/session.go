@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -78,6 +79,7 @@ type Session struct {
 
 	OnExit func(err error)
 	OnDirectoryChanged func(path string)
+	OnSFTPReady        func(client *sftp.Client)
 
 	// Ring buffer for scrollback history and global search
 	scrollback   []byte
@@ -191,12 +193,38 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 			}
 		}
 
-		// Auto SFTP subsystem (skipped on MikroTik RouterOS where SFTP subsystem request terminates the connection)
-		if host.AutoSFTP && !sshSess.IsROSSSH() {
-			if sftpCl, err := sftp.NewClient(sshSess.Client()); err == nil {
+		// Dedicated SFTP subsystem connection (isolated so SFTP failures never drop the terminal shell)
+		if host.AutoSFTP {
+			go func() {
+				sftpCtx, sftpCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer sftpCancel()
+				sftpSSHClient, _, sftpErr := ssh.DialSSH(sftpCtx, host, jumpClient)
+				if sftpErr != nil {
+					log.Printf("[SFTP] Dedicated SSH connection failed for %s: %v", host.Name, sftpErr)
+					return
+				}
+				sftpCl, err := sftp.NewClient(sftpSSHClient)
+				if err != nil {
+					log.Printf("[SFTP] SFTP subsystem unavailable for %s: %v", host.Name, err)
+					_ = sftpSSHClient.Close()
+					return
+				}
+				log.Printf("[SFTP] Dedicated SFTP client established for %s (cwd: %s)", host.Name, sftpCl.CurrentDir())
+				sess.mu.Lock()
+				if sess.closed {
+					sess.mu.Unlock()
+					_ = sftpCl.Close()
+					return
+				}
 				sess.SFTPClient = sftpCl
 				sess.Tracker.SetHomeDir(sftpCl.CurrentDir())
-			}
+				cb := sess.OnSFTPReady
+				sess.mu.Unlock()
+
+				if cb != nil {
+					cb(sftpCl)
+				}
+			}()
 		}
 
 	case storage.ProtoTelnet:

@@ -342,10 +342,14 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 
+	var err error
 	if c.sftpClient != nil {
-		return c.sftpClient.Close()
+		err = c.sftpClient.Close()
 	}
-	return nil
+	if c.sshClient != nil {
+		_ = c.sshClient.Close()
+	}
+	return err
 }
 
 func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, totalSize int64, cb ProgressCallback) error {
