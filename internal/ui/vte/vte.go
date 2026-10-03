@@ -18,6 +18,12 @@ static VteTerminal* TO_VTE_TERMINAL(GtkWidget* w) {
     return VTE_TERMINAL(w);
 }
 
+static GtkWidget* create_vte_scrollbar(GtkWidget* vte_term) {
+    if (!vte_term) return NULL;
+    GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(vte_term));
+    return gtk_scrollbar_new(GTK_ORIENTATION_VERTICAL, vadj);
+}
+
 static glong get_terminal_row_count(GtkWidget* term) {
     return vte_terminal_get_row_count(VTE_TERMINAL(term));
 }
@@ -590,6 +596,7 @@ type Terminal struct {
 	*gtk.Widget
 	vteWidget          *C.GtkWidget
 	vteTerm            *C.VteTerminal
+	Scrollbar          *gtk.Widget
 	OnResize           func(rows, cols int)
 	OnReconnect        func()
 	OnDirectoryChanged func(path string)
@@ -649,6 +656,20 @@ func NewTerminal() (*Terminal, error) {
 	term.ApplyColorScheme("mate")
 	term.Widget.SetSizeRequest(10, 10)
 	return term, nil
+}
+
+// CreateScrollbar creates a native vertical GtkScrollbar synced with VTE's vertical adjustment
+func (t *Terminal) CreateScrollbar() *gtk.Widget {
+	if t.vteWidget == nil {
+		return nil
+	}
+	cScrollbar := C.create_vte_scrollbar(t.vteWidget)
+	if cScrollbar == nil {
+		return nil
+	}
+	glibObj := glib.Take(unsafe.Pointer(cScrollbar))
+	t.Scrollbar = &gtk.Widget{InitiallyUnowned: glib.InitiallyUnowned{Object: glibObj}}
+	return t.Scrollbar
 }
 
 // SetupNativePTY initializes native VTE PTY and returns the opened slave *os.File in RAW mode

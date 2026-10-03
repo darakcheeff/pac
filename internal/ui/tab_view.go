@@ -410,7 +410,15 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	searchBar.SetActiveTerminal(term)
 
 	box.PackStart(searchBar.Box, false, false, 0)
-	box.PackStart(term.Widget, true, true, 0)
+
+	termHBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 0)
+	termHBox.SetHExpand(true)
+	termHBox.SetVExpand(true)
+	termHBox.PackStart(term.Widget, true, true, 0)
+	if scrollbar := term.CreateScrollbar(); scrollbar != nil {
+		termHBox.PackEnd(scrollbar, false, false, 0)
+	}
+	box.PackStart(termHBox, true, true, 0)
 
 	pane := &TerminalPane{
 		Session:  sess,

@@ -117,16 +117,33 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 		}
 
 		targetGroupID := ""
-		path, _, _, _, ok := tv.GetPathAtPos(x, y)
+		path, pos, ok := tv.GetDestRowAtPos(x, y)
+		if !ok || path == nil {
+			var p *gtk.TreePath
+			p, _, _, _, ok = tv.GetPathAtPos(x, y)
+			if ok && p != nil {
+				path = p
+				pos = gtk.TREE_VIEW_DROP_INTO_OR_AFTER
+			}
+		}
+
 		if ok && path != nil {
 			if iter, err := ht.TreeStore.GetIter(path); err == nil {
 				valType, _ := ht.TreeStore.GetValue(iter, ColType)
 				typeStr, _ := valType.GetString()
 				valID, _ := ht.TreeStore.GetValue(iter, ColID)
 				idStr, _ := valID.GetString()
+
 				if typeStr == "group" {
-					if idStr != "root" {
+					if idStr == "root" {
+						targetGroupID = ""
+					} else if pos == gtk.TREE_VIEW_DROP_INTO_OR_BEFORE || pos == gtk.TREE_VIEW_DROP_INTO_OR_AFTER {
 						targetGroupID = idStr
+					} else {
+						// Dropped BEFORE or AFTER folder -> put into same parent folder
+						if g, err := ht.store.GetGroup(idStr); err == nil && g != nil {
+							targetGroupID = g.ParentID
+						}
 					}
 				} else if typeStr == "host" {
 					if h, err := ht.store.GetHost(idStr); err == nil && h != nil {
@@ -134,6 +151,10 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 					}
 				}
 			}
+		}
+
+		if targetGroupID == "root" {
+			targetGroupID = ""
 		}
 
 		entries := strings.Split(payload, ",")
@@ -160,7 +181,15 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 			}
 		}
 
-		ht.Reload()
+		if targetGroupID != "" {
+			delete(ht.collapsedGroups, targetGroupID)
+			ht.saveCollapsedState()
+		}
+
+		// Defer Reload to idle callback to avoid clearing TreeStore while GTK is still finishing the drag event
+		glib.IdleAdd(func() {
+			ht.Reload()
+		})
 	})
 
 	treeView.Connect("row-collapsed", func(tv *gtk.TreeView, iter *gtk.TreeIter, path *gtk.TreePath) {
@@ -227,10 +256,25 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 		return false
 	})
 
-	// Right click context menu
+	// Right click context menu and click selection
 	treeView.Connect("button-press-event", func(tv *gtk.TreeView, event *gdk.Event) bool {
 		tv.GrabFocus()
 		btnEvent := gdk.EventButtonNewFromEvent(event)
+		if btnEvent.Button() == gdk.BUTTON_PRIMARY {
+			path, _, _, _, ok := tv.GetPathAtPos(int(btnEvent.X()), int(btnEvent.Y()))
+			if ok && path != nil {
+				if sel, err := tv.GetSelection(); err == nil {
+					if !sel.PathIsSelected(path) {
+						state := btnEvent.State()
+						if (state&uint(gdk.CONTROL_MASK)) == 0 && (state&uint(gdk.SHIFT_MASK)) == 0 {
+							sel.UnselectAll()
+							sel.SelectPath(path)
+						}
+					}
+				}
+			}
+			return false
+		}
 		if btnEvent.Button() == gdk.BUTTON_SECONDARY {
 			path, _, _, _, ok := tv.GetPathAtPos(int(btnEvent.X()), int(btnEvent.Y()))
 			if ok && path != nil {
@@ -281,12 +325,7 @@ func (ht *HostTree) Reload() {
 
 	groupMap := make(map[string]*gtk.TreeIter)
 
-	// Add groups
-	for _, g := range groups {
-		var parentIter *gtk.TreeIter
-		if g.ParentID != "" && g.ParentID != "root" {
-			parentIter = groupMap[g.ParentID]
-		}
+	appendGroup := func(parentIter *gtk.TreeIter, g storage.Group) *gtk.TreeIter {
 		iter := ht.TreeStore.Append(parentIter)
 		icon := "folder"
 		if g.Icon != "" {
@@ -301,7 +340,44 @@ func (ht *HostTree) Reload() {
 		_ = ht.TreeStore.SetValue(iter, ColIcon, icon)
 		_ = ht.TreeStore.SetValue(iter, ColType, "group")
 		_ = ht.TreeStore.SetValue(iter, ColProtocol, "")
-		groupMap[g.ID] = iter
+		return iter
+	}
+
+	// Multi-pass group insertion to handle arbitrary nesting depth
+	remaining := make([]storage.Group, len(groups))
+	copy(remaining, groups)
+
+	for len(remaining) > 0 {
+		var nextRemaining []storage.Group
+		progress := false
+
+		for _, g := range remaining {
+			if g.ID == "root" {
+				iter := appendGroup(nil, g)
+				groupMap[g.ID] = iter
+				progress = true
+			} else if g.ParentID == "" || g.ParentID == "root" {
+				iter := appendGroup(nil, g)
+				groupMap[g.ID] = iter
+				progress = true
+			} else if parentIter, exists := groupMap[g.ParentID]; exists {
+				iter := appendGroup(parentIter, g)
+				groupMap[g.ID] = iter
+				progress = true
+			} else {
+				nextRemaining = append(nextRemaining, g)
+			}
+		}
+
+		if !progress {
+			// Orphaned or circular references fallback to root
+			for _, g := range nextRemaining {
+				iter := appendGroup(nil, g)
+				groupMap[g.ID] = iter
+			}
+			break
+		}
+		remaining = nextRemaining
 	}
 
 	// Add hosts
@@ -578,7 +654,7 @@ func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {
 
 func isDescendantOf(store *storage.Store, candidateGroupID, ancestorGroupID string) bool {
 	curr := candidateGroupID
-	for curr != "" {
+	for curr != "" && curr != "root" {
 		if curr == ancestorGroupID {
 			return true
 		}

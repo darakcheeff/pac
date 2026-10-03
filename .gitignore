@@ -1,5 +1,7 @@
 # Binaries
 /pac
+/bin/
+/release/
 *.exe
 *.dll
 *.so

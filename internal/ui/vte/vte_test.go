@@ -28,4 +28,9 @@ func TestVteCreation(t *testing.T) {
 	if !ok {
 		t.Fatalf("failed to set search pattern")
 	}
+
+	scrollbar := term.CreateScrollbar()
+	if scrollbar == nil {
+		t.Fatalf("failed to create scrollbar")
+	}
 }
