@@ -97,12 +97,46 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	}
 
 	// Drag and Drop (Reordering / moving hosts into folders)
-	dndTarget, _ := gtk.TargetEntryNew("text/plain", 0, 0)
+	dndTarget, _ := gtk.TargetEntryNew("application/x-pac-tree-item", 0, 0)
 	treeView.DragSourceSet(gdk.BUTTON1_MASK, []gtk.TargetEntry{*dndTarget}, gdk.ACTION_MOVE)
-	treeView.DragDestSet(gtk.DEST_DEFAULT_ALL, []gtk.TargetEntry{*dndTarget}, gdk.ACTION_MOVE)
+	treeView.DragDestSet(gtk.DEST_DEFAULT_MOTION|gtk.DEST_DEFAULT_DROP, []gtk.TargetEntry{*dndTarget}, gdk.ACTION_MOVE)
+
+	treeView.Connect("drag-motion", func(tv *gtk.TreeView, ctx *gdk.DragContext, x, y int, time uint32) bool {
+		path, pos, ok := tv.GetDestRowAtPos(x, y)
+		if ok && path != nil {
+			if iter, err := ht.TreeStore.GetIter(path); err == nil {
+				valType, _ := ht.TreeStore.GetValue(iter, ColType)
+				typeStr, _ := valType.GetString()
+				if typeStr == "group" {
+					pos = gtk.TREE_VIEW_DROP_INTO_OR_AFTER
+				}
+			}
+			tv.SetDragDestRow(path, pos)
+		} else {
+			tv.SetDragDestRow(nil, 0)
+		}
+		return false
+	})
+
+	treeView.Connect("drag-leave", func(tv *gtk.TreeView, ctx *gdk.DragContext, time uint32) {
+		tv.SetDragDestRow(nil, 0)
+	})
 
 	treeView.Connect("drag-data-get", func(tv *gtk.TreeView, ctx *gdk.DragContext, data *gtk.SelectionData, info uint, time uint32) {
 		items := ht.GetSelectedItems()
+		if len(items) == 0 {
+			if path, _ := tv.GetCursor(); path != nil {
+				if iter, err := ht.TreeStore.GetIter(path); err == nil {
+					valType, _ := ht.TreeStore.GetValue(iter, ColType)
+					typeStr, _ := valType.GetString()
+					valID, _ := ht.TreeStore.GetValue(iter, ColID)
+					idStr, _ := valID.GetString()
+					if idStr != "" {
+						items = append(items, TreeSelectedItem{ID: idStr, Type: typeStr})
+					}
+				}
+			}
+		}
 		var ids []string
 		for _, it := range items {
 			ids = append(ids, fmt.Sprintf("%s:%s", it.Type, it.ID))
@@ -111,6 +145,7 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 	})
 
 	treeView.Connect("drag-data-received", func(tv *gtk.TreeView, ctx *gdk.DragContext, x, y int, data *gtk.SelectionData, info uint, time uint32) {
+		tv.SetDragDestRow(nil, 0)
 		payload := data.GetText()
 		if payload == "" {
 			return
@@ -137,13 +172,13 @@ func NewHostTree(store *storage.Store) (*HostTree, error) {
 				if typeStr == "group" {
 					if idStr == "root" {
 						targetGroupID = ""
-					} else if pos == gtk.TREE_VIEW_DROP_INTO_OR_BEFORE || pos == gtk.TREE_VIEW_DROP_INTO_OR_AFTER {
-						targetGroupID = idStr
-					} else {
-						// Dropped BEFORE or AFTER folder -> put into same parent folder
+					} else if pos == gtk.TREE_VIEW_DROP_BEFORE || pos == gtk.TREE_VIEW_DROP_AFTER {
 						if g, err := ht.store.GetGroup(idStr); err == nil && g != nil {
 							targetGroupID = g.ParentID
 						}
+					} else {
+						// Dropped into or onto folder
+						targetGroupID = idStr
 					}
 				} else if typeStr == "host" {
 					if h, err := ht.store.GetHost(idStr); err == nil && h != nil {

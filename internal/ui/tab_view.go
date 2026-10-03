@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,14 +95,15 @@ const (
 
 // TabItem represents one open session tab inside the notebook (can hold multiple split panes)
 type TabItem struct {
-	ID          string
-	Session     *session.Session
-	Label       *gtk.Label
-	TabBox      *gtk.Box
-	EventBox    *gtk.EventBox
-	ContentBox  *gtk.Box
-	Panes       []*TerminalPane
-	FocusedPane *TerminalPane
+	ID             string
+	Session        *session.Session
+	Label          *gtk.Label
+	TabBox         *gtk.Box
+	EventBox       *gtk.EventBox
+	ContentBox     *gtk.Box
+	Panes          []*TerminalPane
+	FocusedPane    *TerminalPane
+	TargetTabIndex int
 }
 
 // TabView manages notebook tabs and terminal splits
@@ -118,6 +120,7 @@ type TabView struct {
 	isClosingTab           bool
 	OnTabChanged           func(sess *session.Session)
 	OnTabClosed            func(sess *session.Session)
+	OnTabReordered         func()
 	OnSplitRequested       func(sess *session.Session, vertical bool)
 	OnDuplicateRequested   func(sess *session.Session)
 	OnReconnectRequested   func(sess *session.Session)
@@ -290,6 +293,13 @@ func NewTabView() (*TabView, error) {
 	nb.AddEvents(int(gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
 	nb.Connect("scroll-event", func(_ *gtk.Notebook, event *gdk.Event) bool {
 		return tv.handleTabScroll(event, true)
+	})
+
+	nb.Connect("page-reordered", func(_ *gtk.Notebook, child *gtk.Widget, pageNum uint) {
+		tv.SyncItemsWithNotebook()
+		if tv.OnTabReordered != nil {
+			tv.OnTabReordered()
+		}
 	})
 
 	nb.Connect("switch-page", func(_ *gtk.Notebook, page *gtk.Widget, pageNum uint) {
@@ -572,6 +582,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		pageNum = tv.Notebook.AppendPage(contentBox, eventBox)
 	}
 	tv.Notebook.SetTabReorderable(contentBox, true)
+	item.TargetTabIndex = len(tv.items)
 	tv.items = append(tv.items, item)
 
 	closeBtn.Connect("clicked", func() {
@@ -913,6 +924,7 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 		pageNum = tv.Notebook.AppendPage(contentBox, eventBox)
 	}
 	tv.Notebook.SetTabReorderable(contentBox, true)
+	item.TargetTabIndex = len(tv.items)
 	tv.items = append(tv.items, item)
 
 	closeBtn.Connect("clicked", func() {
@@ -1637,3 +1649,49 @@ func (tv *TabView) MergeTabInto(targetTab, sourceTab *TabItem, vertical bool) er
 
 	return nil
 }
+
+// SyncItemsWithNotebook synchronizes tv.items order with actual Notebook page order
+func (tv *TabView) SyncItemsWithNotebook() {
+	nPages := tv.Notebook.GetNPages()
+	newItems := make([]*TabItem, 0, len(tv.items))
+	for i := 0; i < nPages; i++ {
+		page, err := tv.Notebook.GetNthPage(i)
+		if err != nil || page == nil {
+			continue
+		}
+		if tv.plusContent != nil && areWidgetsEqual(tv.plusContent, page) {
+			continue
+		}
+		for _, item := range tv.items {
+			if areWidgetsEqual(item.ContentBox, page) {
+				newItems = append(newItems, item)
+				break
+			}
+		}
+	}
+	if len(newItems) == len(tv.items) {
+		tv.items = newItems
+		for idx, it := range tv.items {
+			it.TargetTabIndex = idx
+		}
+	}
+}
+
+// ReorderTabsByTargetIndex sorts existing tabs by TargetTabIndex in the Notebook
+func (tv *TabView) ReorderTabsByTargetIndex() {
+	if len(tv.items) <= 1 {
+		return
+	}
+	sort.SliceStable(tv.items, func(i, j int) bool {
+		return tv.items[i].TargetTabIndex < tv.items[j].TargetTabIndex
+	})
+
+	for i, it := range tv.items {
+		tv.Notebook.ReorderChild(it.ContentBox, i)
+	}
+
+	if tv.plusContent != nil && tv.hasPlusTab {
+		tv.Notebook.ReorderChild(tv.plusContent, -1)
+	}
+}
+

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1050,6 +1051,12 @@ func (app *AppWindow) setupSignals() {
 		app.ToggleNotesPanel()
 	}
 
+	app.TabView.OnTabReordered = func() {
+		if app.settings.AutoRestoreSessions {
+			app.SaveAllSessionState()
+		}
+	}
+
 	app.TabView.OnFindRequested = func(item *TabItem) {
 		if item != nil && item.FocusedPane != nil && item.FocusedPane.Search != nil {
 			item.FocusedPane.Search.Show()
@@ -1370,13 +1377,33 @@ func (app *AppWindow) RestoreSavedSessions() {
 		}
 	}
 
+	sort.Ints(tabIndices)
+
 	totalSessions := len(savedSessions)
 	restoredCount := 0
+
+	finishSessionRestore := func() {
+		restoredCount++
+		if restoredCount >= totalSessions {
+			app.restoreMu.Lock()
+			app.isRestoring = false
+			app.restoreMu.Unlock()
+			log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
+
+			app.TabView.ReorderTabsByTargetIndex()
+			if savedActiveIdx, sErr := app.store.GetSetting("active_tab_index"); sErr == nil && savedActiveIdx != "" {
+				if idx, aErr := strconv.Atoi(savedActiveIdx); aErr == nil && idx >= 0 && idx < len(app.TabView.items) {
+					app.TabView.Notebook.SetCurrentPage(idx)
+				}
+			}
+		}
+	}
 
 	for _, tIdx := range tabIndices {
 		grp := groups[tIdx]
 		st := grp.primary
 		splits := grp.splits
+		targetTabIndex := tIdx
 
 		var h *storage.Host
 		hostFoundInDB := false
@@ -1415,10 +1442,12 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 		term, err := vte.NewTerminal()
 		if err != nil {
+			totalSessions -= (1 + len(splits))
 			continue
 		}
 		slaveFile, err := term.SetupNativePTY()
 		if err != nil {
+			totalSessions -= (1 + len(splits))
 			continue
 		}
 		if h.FontName != "" {
@@ -1442,6 +1471,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 					log.Printf("[RESTORE] ERROR starting session for %s: %v", savedState.Title, err)
 					app.ShowError(i18n.T("Ошибка восстановления сессии", "Session Restore Error"),
 						i18n.Tf("Не удалось восстановить сохраненную сессию \"%s\":\n\n%s", "Failed to restore saved session \"%s\":\n\n%s", savedState.Title, err.Error()))
+					finishSessionRestore()
 					return
 				}
 				sess.ID = savedState.ID
@@ -1460,6 +1490,9 @@ func (app *AppWindow) RestoreSavedSessions() {
 				}
 
 				tabItem, _ := app.TabView.AddTab(sess, term)
+				tabItem.TargetTabIndex = targetTabIndex
+				app.TabView.ReorderTabsByTargetIndex()
+
 				app.NotesPanel.LoadSessionNotes(sess)
 				if sess.SFTPClient != nil {
 					app.SFTPPanel.AttachClient(sess.ID, hostCopy.ID, sess.SFTPClient, app.settings.DefaultEditor)
@@ -1467,13 +1500,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 				app.attachSessionExitHandler(sess, term, hostCopy, savedState.Title)
 
-				restoredCount++
-				if restoredCount >= totalSessions {
-					app.restoreMu.Lock()
-					app.isRestoring = false
-					app.restoreMu.Unlock()
-					log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
-				}
+				finishSessionRestore()
 
 				// Sort split children by PaneIndex so parent panes are restored before their children
 				sort.Slice(splitStates, func(i, j int) bool {
@@ -1488,13 +1515,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 					}
 					chState := splitStates[idx]
 					app.restoreSplitPane(tabItem, chState, func() {
-						restoredCount++
-						if restoredCount >= totalSessions {
-							app.restoreMu.Lock()
-							app.isRestoring = false
-							app.restoreMu.Unlock()
-							log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
-						}
+						finishSessionRestore()
 						restoreNextSplit(idx + 1)
 					})
 				}
@@ -1503,6 +1524,12 @@ func (app *AppWindow) RestoreSavedSessions() {
 				}
 			})
 		}()
+	}
+
+	if totalSessions <= 0 {
+		app.restoreMu.Lock()
+		app.isRestoring = false
+		app.restoreMu.Unlock()
 	}
 }
 
@@ -1599,8 +1626,21 @@ func (app *AppWindow) SaveAllSessionState() {
 	}
 	app.restoreMu.Unlock()
 
+	// Ensure items slice reflects current notebook page order
+	app.TabView.SyncItemsWithNotebook()
+
+	// Save active tab index
+	curPage := app.TabView.Notebook.GetCurrentPage()
+	if curPage >= 0 {
+		_ = app.store.SaveSetting("active_tab_index", fmt.Sprintf("%d", curPage))
+	}
+
 	var states []storage.SavedSessionState
-	for tabIdx, item := range app.TabView.items {
+	for sliceIdx, item := range app.TabView.items {
+		tabIdx := app.TabView.Notebook.PageNum(item.ContentBox)
+		if tabIdx < 0 {
+			tabIdx = sliceIdx
+		}
 		for paneIdx, pane := range item.Panes {
 			s := pane.Session
 			if s == nil {

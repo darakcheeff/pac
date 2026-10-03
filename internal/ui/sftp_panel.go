@@ -305,9 +305,23 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 
 	// Setup Drag and Drop: internal moving into folders + external upload from desktop/file manager
 	targetURI, _ := gtk.TargetEntryNew("text/uri-list", 0, 1)
-	targetText, _ := gtk.TargetEntryNew("text/plain", 0, 2)
-	treeView.DragSourceSet(gdk.BUTTON1_MASK, []gtk.TargetEntry{*targetText}, gdk.ACTION_MOVE)
-	treeView.DragDestSet(gtk.DEST_DEFAULT_ALL, []gtk.TargetEntry{*targetURI, *targetText}, gdk.ACTION_COPY|gdk.ACTION_MOVE)
+	targetInternal, _ := gtk.TargetEntryNew("application/x-pac-sftp-item", 0, 2)
+	treeView.DragSourceSet(gdk.BUTTON1_MASK, []gtk.TargetEntry{*targetInternal}, gdk.ACTION_MOVE)
+	treeView.DragDestSet(gtk.DEST_DEFAULT_MOTION|gtk.DEST_DEFAULT_DROP, []gtk.TargetEntry{*targetURI, *targetInternal}, gdk.ACTION_COPY|gdk.ACTION_MOVE)
+
+	treeView.Connect("drag-motion", func(tv *gtk.TreeView, ctx *gdk.DragContext, x, y int, time uint32) bool {
+		path, pos, ok := tv.GetDestRowAtPos(x, y)
+		if ok && path != nil {
+			tv.SetDragDestRow(path, pos)
+		} else {
+			tv.SetDragDestRow(nil, 0)
+		}
+		return false
+	})
+
+	treeView.Connect("drag-leave", func(tv *gtk.TreeView, ctx *gdk.DragContext, time uint32) {
+		tv.SetDragDestRow(nil, 0)
+	})
 
 	treeView.Connect("drag-data-get", func(tv *gtk.TreeView, ctx *gdk.DragContext, data *gtk.SelectionData, info uint, time uint32) {
 		files := panel.getSelectedFiles()
@@ -319,6 +333,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	})
 
 	treeView.Connect("drag-data-received", func(tv *gtk.TreeView, context *gdk.DragContext, x, y int, data *gtk.SelectionData, info uint, time uint32) {
+		tv.SetDragDestRow(nil, 0)
 		if panel.client == nil {
 			return
 		}
