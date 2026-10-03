@@ -1282,10 +1282,11 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 				if ctx.Err() != nil {
 					break
 				}
-				localDest := filepath.Join(targetDir, f.name)
+				cleanName := filepath.Base(f.name)
+				localDest := filepath.Join(targetDir, cleanName)
 				statusText := fmt.Sprintf("%s (%d/%d): %s",
 					i18n.T("Скачивание: ", "Downloading: "),
-					i+1, totalCount, f.name)
+					i+1, totalCount, cleanName)
 
 				sp.sessMu.Lock()
 				if sd, ok := sp.sessions[sessionID]; ok {

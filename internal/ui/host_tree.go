@@ -493,7 +493,10 @@ func (ht *HostTree) DeleteSelected() {
 	}
 
 	dlg := gtk.MessageDialogNew(nil, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", confirmMsg)
-	if dlg.Run() == gtk.RESPONSE_YES {
+	resp := dlg.Run()
+	dlg.Destroy()
+
+	if resp == gtk.RESPONSE_YES {
 		var delErrors []string
 		for _, it := range validItems {
 			if it.Type == "host" {
@@ -515,7 +518,6 @@ func (ht *HostTree) DeleteSelected() {
 		}
 		ht.Reload()
 	}
-	dlg.Destroy()
 }
 
 func (ht *HostTree) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {

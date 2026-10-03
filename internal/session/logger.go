@@ -33,7 +33,7 @@ func NewSessionLogger(host *storage.Host, defaultDir string) (*SessionLogger, er
 		logDir = filepath.Join(home, "logs", "sessions")
 	}
 
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create log dir: %w", err)
 	}
 
@@ -47,7 +47,7 @@ func NewSessionLogger(host *storage.Host, defaultDir string) (*SessionLogger, er
 	}
 
 	filePath := filepath.Join(logDir, filename)
-	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
 	}

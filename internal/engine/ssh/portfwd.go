@@ -31,19 +31,18 @@ func NewForwardManager(client *ssh.Client) *ForwardManager {
 // StartForwardings starts all configured port forwardings
 func (fm *ForwardManager) StartForwardings(forwards []storage.PortForward) error {
 	for _, f := range forwards {
+		var err error
 		switch f.Type {
 		case "local", "L":
-			if err := fm.StartLocalForward(f.LocalPort, f.RemoteHost, f.RemotePort); err != nil {
-				return err
-			}
+			err = fm.StartLocalForward(f.LocalPort, f.RemoteHost, f.RemotePort)
 		case "remote", "R":
-			if err := fm.StartRemoteForward(f.RemotePort, f.RemoteHost, f.LocalPort); err != nil {
-				return err
-			}
+			err = fm.StartRemoteForward(f.RemotePort, f.RemoteHost, f.LocalPort)
 		case "dynamic", "D":
-			if err := fm.StartDynamicSOCKS5(f.LocalPort); err != nil {
-				return err
-			}
+			err = fm.StartDynamicSOCKS5(f.LocalPort)
+		}
+		if err != nil {
+			fm.Close()
+			return err
 		}
 	}
 	return nil

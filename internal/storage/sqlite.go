@@ -29,7 +29,7 @@ func NewStore(dbPath string) (*Store, error) {
 		dbPath = filepath.Join(home, ".config", "pac", "pac.db")
 	}
 	log.Printf("[DB] Opening SQLite database at: %s", dbPath)
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
 
