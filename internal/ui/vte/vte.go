@@ -520,7 +520,7 @@ func goOnVteDirectoryChanged(widget *C.GtkWidget, cUri *C.char) {
 		cb := t.OnDirectoryChanged
 		t.mu.Unlock()
 		if cb != nil {
-			cb(parsed)
+			go cb(parsed)
 		}
 	}
 }
@@ -543,7 +543,7 @@ func goOnVteTitleChanged(widget *C.GtkWidget, cTitle *C.char) {
 		cb := t.OnDirectoryChanged
 		t.mu.Unlock()
 		if cb != nil {
-			cb(dir)
+			go cb(dir)
 		}
 	}
 }
@@ -898,4 +898,16 @@ func (t *Terminal) SetFontScale(scale float64) {
 		C.vte_apply_font_scale(t.vteTerm, C.gdouble(scale))
 	}
 }
+
+// Destroy cleans up terminal registrations from the global CGO map and clears callbacks
+func (t *Terminal) Destroy() {
+	unregisterTerminal(t)
+	t.mu.Lock()
+	t.OnContentsChanged = nil
+	t.OnDirectoryChanged = nil
+	t.OnReconnect = nil
+	t.OnResize = nil
+	t.mu.Unlock()
+}
+
 

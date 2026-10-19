@@ -1721,6 +1721,96 @@ func (app *AppWindow) SaveAllSessionState() {
 	app.lastSavedMu.Unlock()
 
 	log.Printf("[STATE] Saving %d active pane(s) across %d tab(s) to SQLite...", len(states), len(app.TabView.items))
+	go func(st []storage.SavedSessionState) {
+		if err := app.store.SaveActiveSessions(st); err != nil {
+			log.Printf("[STATE] Error saving active sessions to SQLite: %v", err)
+		}
+	}(states)
+}
+
+// SaveAllSessionStateSync dumps and writes state synchronously to SQLite (used during Quit)
+func (app *AppWindow) SaveAllSessionStateSync() {
+	app.restoreMu.Lock()
+	if app.isRestoring {
+		app.restoreMu.Unlock()
+		return
+	}
+	app.restoreMu.Unlock()
+
+	app.TabView.SyncItemsWithNotebook()
+
+	curPage := app.TabView.Notebook.GetCurrentPage()
+	if curPage >= 0 {
+		_ = app.store.SaveSetting("active_tab_index", fmt.Sprintf("%d", curPage))
+	}
+
+	var states []storage.SavedSessionState
+	for sliceIdx, item := range app.TabView.items {
+		tabIdx := app.TabView.Notebook.PageNum(item.ContentBox)
+		if tabIdx < 0 {
+			tabIdx = sliceIdx
+		}
+		for paneIdx, pane := range item.Panes {
+			s := pane.Session
+			if s == nil {
+				continue
+			}
+			hostID := ""
+			protocol := storage.ProtoLocal
+			hostSnapshot := ""
+			if s.Host != nil {
+				hostID = s.Host.ID
+				protocol = s.Host.Protocol
+				if strings.HasPrefix(hostID, "quick-") {
+					if snap, err := json.Marshal(s.Host); err == nil {
+						hostSnapshot = string(snap)
+					}
+				}
+			}
+			scrollback := ""
+			if pane.Terminal != nil {
+				scrollback = pane.Terminal.GetCleanText()
+			}
+			if scrollback == "" {
+				scrollback = s.GetScrollbackText()
+			}
+			scrollback = session.CleanScrollbackDump(scrollback)
+			workingDir := "/"
+			if s.SFTPClient != nil {
+				workingDir = s.SFTPClient.CurrentDir()
+			}
+			parentID := ""
+			splitDir := "none"
+			if paneIdx > 0 {
+				parentID = pane.ParentSessionID
+				if parentID == "" && len(item.Panes) > 0 && item.Panes[0].Session != nil {
+					parentID = item.Panes[0].Session.ID
+				}
+				splitDir = pane.SplitDirection
+				if splitDir == "" {
+					splitDir = "horizontal"
+				}
+			}
+
+			st := storage.SavedSessionState{
+				ID:             s.ID,
+				HostID:         hostID,
+				Title:          s.Title,
+				Protocol:       protocol,
+				TabIndex:       tabIdx,
+				PaneIndex:      paneIdx,
+				SplitParentID:  parentID,
+				SplitDirection: splitDir,
+				WorkingDir:     workingDir,
+				ScrollbackDump: scrollback,
+				Notes:          s.Notes,
+				SavedAt:        time.Now(),
+				HostSnapshot:   hostSnapshot,
+			}
+			states = append(states, st)
+		}
+	}
+
 	_ = app.store.SaveActiveSessions(states)
 }
 
@@ -1728,7 +1818,7 @@ func (app *AppWindow) SaveAllSessionState() {
 func (app *AppWindow) Quit() {
 	log.Printf("[APP] Application quit requested. Active sessions: %d", len(app.manager.GetAll()))
 	if app.settings.AutoRestoreSessions {
-		app.SaveAllSessionState()
+		app.SaveAllSessionStateSync()
 	}
 	app.manager.CloseAll()
 	_ = app.watcherMgr.Close()

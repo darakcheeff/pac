@@ -44,7 +44,6 @@ import (
 	"unsafe"
 
 	"github.com/gotk3/gotk3/gdk"
-	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -118,9 +117,7 @@ func (t *TrayIcon) buildMenu() {
 	// Show/Hide entry
 	showHideItem, _ := gtk.MenuItemNewWithLabel(t.showHideLabel())
 	showHideItem.Connect("activate", func() {
-		glib.IdleAdd(func() {
-			t.toggleWindow(showHideItem)
-		})
+		t.toggleWindow(showHideItem)
 	})
 	menu.Append(showHideItem)
 
@@ -131,9 +128,7 @@ func (t *TrayIcon) buildMenu() {
 	// Quit entry
 	quitItem, _ := gtk.MenuItemNewWithLabel("Выход / Quit")
 	quitItem.Connect("activate", func() {
-		glib.IdleAdd(func() {
-			t.app.Quit()
-		})
+		t.app.Quit()
 	})
 	menu.Append(quitItem)
 

@@ -844,6 +844,12 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 	if pane.Session != nil {
 		_ = pane.Session.Close()
 	}
+	if pane.Terminal != nil {
+		pane.Terminal.Destroy()
+	}
+	if pane.Box != nil {
+		pane.Box.Destroy()
+	}
 
 	if len(item.Panes) > 0 {
 		item.FocusedPane = item.Panes[0]
@@ -1085,6 +1091,12 @@ func (tv *TabView) CloseTab(item *TabItem) {
 				tv.OnTabClosed(p.Session)
 			}
 			_ = p.Session.Close()
+		}
+		if p.Terminal != nil {
+			p.Terminal.Destroy()
+		}
+		if p.Box != nil {
+			p.Box.Destroy()
 		}
 	}
 
