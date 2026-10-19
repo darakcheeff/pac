@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -1935,7 +1936,16 @@ func (app *AppWindow) setupSessionDirectorySync(sess *session.Session, term *vte
 			sess.NotifyDirectory(path)
 		}
 	}
-	sess.OnDirectoryChanged = func(path string) {
+	sess.OnDirectoryChanged = func(dirPath string) {
+		if dirPath == "~" {
+			if sess.SFTPClient != nil {
+				dirPath = sess.SFTPClient.CurrentDir()
+			}
+		} else if strings.HasPrefix(dirPath, "~/") {
+			if sess.SFTPClient != nil {
+				dirPath = path.Join(sess.SFTPClient.CurrentDir(), strings.TrimPrefix(dirPath, "~/"))
+			}
+		}
 		glib.IdleAdd(func() {
 			currTab := app.TabView.GetCurrentTab()
 			if currTab == nil {
@@ -1955,11 +1965,11 @@ func (app *AppWindow) setupSessionDirectorySync(sess *session.Session, term *vte
 				if app.SFTPPanel.GetCurrentSessionID() != sess.ID && sess.SFTPClient != nil {
 					app.SFTPPanel.AttachClient(sess.ID, hostID, sess.SFTPClient, app.settings.DefaultEditor)
 				}
-				app.SFTPPanel.LoadDirectory(path)
+				app.SFTPPanel.LoadDirectory(dirPath)
 			} else {
 				if sess.SFTPClient != nil {
-					sess.SFTPClient.SetCurrentDir(path)
-					app.SFTPPanel.InvalidateSessionCache(sess.ID, path)
+					sess.SFTPClient.SetCurrentDir(dirPath)
+					app.SFTPPanel.InvalidateSessionCache(sess.ID, dirPath)
 				}
 			}
 		})

@@ -445,17 +445,13 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	}
 
 	term.OnContentsChanged = func() {
-		glib.IdleAdd(func() {
-			if pane == nil || pane.TabItem == nil {
-				return
-			}
-			if !tv.isPaneFocused(pane) {
-				if !pane.HasUnreadActivity {
-					pane.HasUnreadActivity = true
-					tv.UpdateTabTitle(pane.TabItem)
-				}
-			}
-		})
+		if pane == nil || pane.TabItem == nil || pane.HasUnreadActivity {
+			return
+		}
+		if !tv.isPaneFocused(pane) {
+			pane.HasUnreadActivity = true
+			tv.UpdateTabTitle(pane.TabItem)
+		}
 	}
 
 	// Focus and click handling

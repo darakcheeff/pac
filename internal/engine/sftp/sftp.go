@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +104,34 @@ func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 
 	if remotePath == "" {
 		remotePath = c.currentDir
+	}
+
+	if remotePath == "~" {
+		if c.isLocal {
+			if h, err := os.UserHomeDir(); err == nil && h != "" {
+				remotePath = h
+			}
+		} else if c.sftpClient != nil {
+			if pwd, err := c.sftpClient.Getwd(); err == nil && pwd != "" {
+				remotePath = pwd
+			} else {
+				remotePath = c.currentDir
+			}
+		} else {
+			remotePath = c.currentDir
+		}
+	} else if strings.HasPrefix(remotePath, "~/") {
+		base := c.currentDir
+		if c.isLocal {
+			if h, err := os.UserHomeDir(); err == nil && h != "" {
+				base = h
+			}
+		} else if c.sftpClient != nil {
+			if pwd, err := c.sftpClient.Getwd(); err == nil && pwd != "" {
+				base = pwd
+			}
+		}
+		remotePath = path.Join(base, strings.TrimPrefix(remotePath, "~/"))
 	}
 
 	if c.isLocal {

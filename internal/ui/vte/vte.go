@@ -580,9 +580,7 @@ func goOnVteKeyPress(widget *C.GtkWidget, keyval C.guint) C.int {
 			handler := t.OnReconnect
 			t.mu.Unlock()
 			if handler != nil {
-				glib.IdleAdd(func() {
-					handler()
-				})
+				go handler()
 			}
 		}
 		return 1
