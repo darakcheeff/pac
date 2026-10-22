@@ -65,18 +65,22 @@ func NewRemoteEditManager() (*RemoteEditManager, error) {
 // OpenForEditing tracks a file, launches external editor, and watches for saves
 func (m *RemoteEditManager) OpenForEditing(hostID, remotePath string, downloadFn func(localPath string) error, uploadFn UploadHandler, preferredEditor string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	tempDir := m.tempDir
+	m.mu.Unlock()
 
-	hostTempDir := filepath.Join(m.tempDir, hostID)
+	hostTempDir := filepath.Join(tempDir, hostID)
 	_ = os.MkdirAll(hostTempDir, 0700)
 
 	baseName := filepath.Base(remotePath)
 	localPath := filepath.Join(hostTempDir, baseName)
 
-	// Download the remote file
+	// Download the remote file outside the lock so other watcher events are never blocked
 	if err := downloadFn(localPath); err != nil {
 		return fmt.Errorf("failed to download remote file for editing: %w", err)
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Add file to fsnotify watcher
 	if err := m.fsWatcher.Add(localPath); err != nil {

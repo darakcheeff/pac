@@ -143,10 +143,14 @@ func (np *NotesPanel) scheduleAutoSave() {
 	sess := np.currentSession
 	np.saveTimer = time.AfterFunc(500*time.Millisecond, func() {
 		np.mu.Lock()
-		if sess.Host != nil && text != np.lastSavedText {
-			np.lastSavedText = text
-			_ = np.store.SaveNote(sess.Host.ID, text)
+		if sess.Host == nil || text == np.lastSavedText {
+			np.mu.Unlock()
+			return
 		}
+		np.lastSavedText = text
+		hostID := sess.Host.ID
 		np.mu.Unlock()
+
+		_ = np.store.SaveNote(hostID, text)
 	})
 }

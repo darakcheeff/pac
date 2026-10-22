@@ -24,9 +24,13 @@ func NewOSC52Parser(onCopy func(target string, text string)) *OSC52Parser {
 
 // Feed processes incoming byte chunks and triggers onCopy if OSC 52 sequence is completed
 func (p *OSC52Parser) Feed(data []byte) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	type copyItem struct {
+		target string
+		text   string
+	}
+	var items []copyItem
 
+	p.mu.Lock()
 	p.buf = append(p.buf, data...)
 	if len(p.buf) > 1024*1024 { // Cap buffer at 1MB to prevent memory leak on malformed streams
 		p.buf = p.buf[len(p.buf)-64*1024:]
@@ -100,9 +104,15 @@ func (p *OSC52Parser) Feed(data []byte) {
 			decoded, err = base64.RawStdEncoding.DecodeString(b64)
 		}
 		if err == nil && len(decoded) > 0 {
-			if p.onCopy != nil {
-				p.onCopy(target, string(decoded))
-			}
+			items = append(items, copyItem{target: target, text: string(decoded)})
+		}
+	}
+	cb := p.onCopy
+	p.mu.Unlock()
+
+	if cb != nil {
+		for _, item := range items {
+			cb(item.target, item.text)
 		}
 	}
 }

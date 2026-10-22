@@ -388,19 +388,21 @@ func (c *Client) Chmod(remotePath string, mode os.FileMode) error {
 // Close closes the SFTP client
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
+	sftpClient := c.sftpClient
+	sshClient := c.sshClient
+	c.mu.Unlock()
 
 	var err error
-	if c.sftpClient != nil {
-		err = c.sftpClient.Close()
+	if sftpClient != nil {
+		err = sftpClient.Close()
 	}
-	if c.sshClient != nil {
-		_ = c.sshClient.Close()
+	if sshClient != nil {
+		_ = sshClient.Close()
 	}
 	return err
 }

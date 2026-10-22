@@ -72,20 +72,24 @@ func (m *Manager) GetAll() []*Session {
 
 // BroadcastInput sends input string to all active sessions or filtered by sessionIDs
 func (m *Manager) BroadcastInput(input string, sessionIDs []string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	targetMap := make(map[string]bool)
 	for _, id := range sessionIDs {
 		targetMap[id] = true
 	}
 
-	count := 0
+	m.mu.RLock()
+	var targets []*Session
 	for id, s := range m.sessions {
 		if len(targetMap) == 0 || targetMap[id] {
-			if err := s.SendInput(input); err == nil {
-				count++
-			}
+			targets = append(targets, s)
+		}
+	}
+	m.mu.RUnlock()
+
+	count := 0
+	for _, s := range targets {
+		if err := s.SendInput(input); err == nil {
+			count++
 		}
 	}
 	return count
@@ -93,12 +97,16 @@ func (m *Manager) BroadcastInput(input string, sessionIDs []string) int {
 
 // GlobalSearch performs full-text search across scrollback buffers of all active sessions
 func (m *Manager) GlobalSearch(ctx context.Context, query string, caseSensitive bool) []SearchMatch {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	if query == "" {
 		return nil
 	}
+
+	m.mu.RLock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.RUnlock()
 
 	var results []SearchMatch
 	searchQ := query
@@ -106,7 +114,7 @@ func (m *Manager) GlobalSearch(ctx context.Context, query string, caseSensitive 
 		searchQ = strings.ToLower(query)
 	}
 
-	for _, s := range m.sessions {
+	for _, s := range sessions {
 		select {
 		case <-ctx.Done():
 			return results

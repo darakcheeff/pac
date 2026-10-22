@@ -1189,7 +1189,23 @@ func (sp *SFTPPanel) triggerRemoteEdit(remotePath string) {
 		return err
 	}
 
-	_ = sp.watcherMgr.OpenForEditing(hostID, remotePath, downloadFn, uploadFn, sp.editorPref)
+	go func() {
+		err := sp.watcherMgr.OpenForEditing(hostID, remotePath, downloadFn, uploadFn, sp.editorPref)
+		glib.IdleAdd(func() {
+			sp.sessMu.Lock()
+			isCurrent := (sp.currentSessID == sessionID)
+			sp.sessMu.Unlock()
+			if isCurrent {
+				if err != nil {
+					sp.StatusLabel.SetText(i18n.T("Ошибка открытия: ", "Open error: ") + err.Error())
+					sp.showError(i18n.T("Ошибка открытия файла", "File Open Error"),
+						i18n.Tf("Не удалось открыть файл \"%s\":\n\n%s", "Failed to open file \"%s\":\n\n%s", remoteBaseName(remotePath), err.Error()))
+				} else {
+					sp.StatusLabel.SetText(i18n.T("Файл открыт в редакторе", "File opened in editor"))
+				}
+			}
+		})
+	}()
 }
 
 type sftpSelectedFile struct {

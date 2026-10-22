@@ -322,22 +322,26 @@ func (s *SSHSession) Wait() error {
 // Close closes session, forwards, and underlying client
 func (s *SSHSession) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
+	cancel := s.cancel
+	fwdMgr := s.forwardManager
+	sess := s.session
+	client := s.client
+	s.mu.Unlock()
 
-	if s.forwardManager != nil {
-		s.forwardManager.Close()
+	cancel()
+	if fwdMgr != nil {
+		fwdMgr.Close()
 	}
-	if s.session != nil {
-		_ = s.session.Close()
+	if sess != nil {
+		_ = sess.Close()
 	}
-	if s.client != nil {
-		_ = s.client.Close()
+	if client != nil {
+		_ = client.Close()
 	}
 	return nil
 }

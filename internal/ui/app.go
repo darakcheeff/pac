@@ -1903,17 +1903,12 @@ func (app *AppWindow) resolveJumpClient(host *storage.Host) *cryptoSsh.Client {
 		log.Printf("[APP] resolveJumpClient: jump host %s not found: %v", host.ProxyJumpHost, err)
 		return nil
 	}
-	jBridge, bErr := pty.Open()
-	if bErr != nil {
-		log.Printf("[APP] resolveJumpClient: failed to open PTY for jump host: %v", bErr)
-		return nil
-	}
-	jSess, jErr := engineSSH.ConnectSSH(context.Background(), jumpHost, jBridge, nil)
+	jClient, _, jErr := engineSSH.DialSSH(context.Background(), jumpHost, nil)
 	if jErr != nil {
 		log.Printf("[APP] resolveJumpClient: failed to connect to jump host %s: %v", host.ProxyJumpHost, jErr)
 		return nil
 	}
-	return jSess.Client()
+	return jClient
 }
 
 // setSessionDisconnected displays error/disconnect prompt in terminal, updates status, and wires Enter to reconnect

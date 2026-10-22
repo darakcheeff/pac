@@ -352,36 +352,44 @@ func (s *Session) IsClosed() bool {
 // Close closes session and all underlying resources
 func (s *Session) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
+	cancel := s.cancel
+	logger := s.Logger
+	sftpClient := s.SFTPClient
+	sshSession := s.SSHSession
+	telnetSession := s.TelnetSession
+	serialSession := s.SerialSession
+	localSession := s.LocalSession
+	ptyBridge := s.PTY
+	s.mu.Unlock()
 
-	if s.Logger != nil {
-		_ = s.Logger.Close()
+	if cancel != nil {
+		cancel()
 	}
-	if s.SFTPClient != nil {
-		_ = s.SFTPClient.Close()
+	if logger != nil {
+		_ = logger.Close()
 	}
-	if s.SSHSession != nil {
-		_ = s.SSHSession.Close()
+	if sftpClient != nil {
+		_ = sftpClient.Close()
 	}
-	if s.TelnetSession != nil {
-		_ = s.TelnetSession.Close()
+	if sshSession != nil {
+		_ = sshSession.Close()
 	}
-	if s.SerialSession != nil {
-		_ = s.SerialSession.Close()
+	if telnetSession != nil {
+		_ = telnetSession.Close()
 	}
-	if s.LocalSession != nil {
-		_ = s.LocalSession.Close()
+	if serialSession != nil {
+		_ = serialSession.Close()
 	}
-	if s.PTY != nil {
-		_ = s.PTY.Close()
+	if localSession != nil {
+		_ = localSession.Close()
+	}
+	if ptyBridge != nil {
+		_ = ptyBridge.Close()
 	}
 	return nil
 }
