@@ -1469,10 +1469,50 @@ func (app *AppWindow) RestoreSavedSessions() {
 			sess, err := session.StartSessionWithBridge(context.Background(), hostCopy, savedState.Title, app.settings.DefaultLogsDir, bridge, nil)
 			glib.IdleAdd(func() {
 				if err != nil {
-					log.Printf("[RESTORE] ERROR starting session for %s: %v", savedState.Title, err)
-					app.ShowError(i18n.T("Ошибка восстановления сессии", "Session Restore Error"),
-						i18n.Tf("Не удалось восстановить сохраненную сессию \"%s\":\n\n%s", "Failed to restore saved session \"%s\":\n\n%s", savedState.Title, err.Error()))
+					log.Printf("[RESTORE] Failed to start session for %s: %v", savedState.Title, err)
+					sess = &session.Session{
+						ID:    savedState.ID,
+						Host:  hostCopy,
+						Title: savedState.Title,
+						Notes: savedState.Notes,
+					}
+					app.manager.Register(sess)
+
+					if savedState.ScrollbackDump != "" {
+						restored := session.FormatRestoredText(savedState.ScrollbackDump, savedState.SavedAt)
+						if restored != "" {
+							term.FeedText(restored)
+						}
+					}
+
+					tabItem, _ := app.TabView.AddTab(sess, term)
+					tabItem.TargetTabIndex = targetTabIndex
+					app.TabView.ReorderTabsByTargetIndex()
+
+					app.NotesPanel.LoadSessionNotes(sess)
+					app.setSessionDisconnected(sess, term, hostCopy, savedState.Title, err)
 					finishSessionRestore()
+
+					// Sort split children by PaneIndex so parent panes are restored before their children
+					sort.Slice(splitStates, func(i, j int) bool {
+						return splitStates[i].PaneIndex < splitStates[j].PaneIndex
+					})
+
+					// Restore split children into this tabItem sequentially
+					var restoreNextSplit func(idx int)
+					restoreNextSplit = func(idx int) {
+						if idx >= len(splitStates) {
+							return
+						}
+						chState := splitStates[idx]
+						app.restoreSplitPane(tabItem, chState, func() {
+							finishSessionRestore()
+							restoreNextSplit(idx + 1)
+						})
+					}
+					if len(splitStates) > 0 {
+						restoreNextSplit(0)
+					}
 					return
 				}
 				sess.ID = savedState.ID
@@ -1590,7 +1630,29 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 			}()
 
 			if err != nil {
-				log.Printf("[RESTORE] ERROR restoring split session %s: %v", st.Title, err)
+				log.Printf("[RESTORE] Failed to restore split session %s: %v", st.Title, err)
+				sess = &session.Session{
+					ID:    st.ID,
+					Host:  h,
+					Title: st.Title,
+					Notes: st.Notes,
+				}
+				app.manager.Register(sess)
+
+				if st.ScrollbackDump != "" {
+					restored := session.FormatRestoredText(st.ScrollbackDump, st.SavedAt)
+					if restored != "" {
+						term.FeedText(restored)
+					}
+				}
+
+				var targetParent *TerminalPane
+				if st.SplitParentID != "" {
+					targetParent = app.TabView.FindPaneBySessionID(tabItem, st.SplitParentID)
+				}
+				isVertical := st.SplitDirection == "vertical" || st.SplitDirection == "left-right"
+				_ = app.TabView.SplitPane(tabItem, targetParent, sess, term, isVertical)
+				app.setSessionDisconnected(sess, term, h, st.Title, err)
 				return
 			}
 			sess.ID = st.ID
@@ -1854,6 +1916,84 @@ func (app *AppWindow) resolveJumpClient(host *storage.Host) *cryptoSsh.Client {
 	return jSess.Client()
 }
 
+// setSessionDisconnected displays error/disconnect prompt in terminal, updates status, and wires Enter to reconnect
+func (app *AppWindow) setSessionDisconnected(sess *session.Session, term *vte.Terminal, host *storage.Host, tabTitle string, reasonErr error) {
+	if term == nil || host == nil {
+		return
+	}
+
+	if reasonErr != nil {
+		term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка подключения: ", "Connection error: ") + reasonErr.Error() + "\x1b[0m\r\n")
+	}
+	term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
+	app.StatusLabel.SetText(i18n.Tf("Сессия %s закрыта", "Session %s closed", host.Name))
+
+	var reconnectFunc func()
+	reconnectFunc = func() {
+		term.SetDisconnected(false, nil)
+		term.FeedText("\r\n\x1b[1;36m" + i18n.T("[Переподключение...]", "[Reconnecting...]") + "\x1b[0m\r\n")
+		app.StatusLabel.SetText(i18n.Tf("Переподключение к %s...", "Reconnecting to %s...", host.Host))
+
+		slaveFile, err := term.SetupNativePTY()
+		if err != nil {
+			term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка инициализации PTY: ", "PTY initialization error: ") + err.Error() + "\x1b[0m\r\n")
+			term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
+			term.SetDisconnected(true, reconnectFunc)
+			return
+		}
+
+		bridge := pty.FromSlave(slaveFile)
+		go func() {
+			if sess != nil {
+				_ = sess.Close()
+				app.manager.Unregister(sess.ID)
+			}
+			jumpClient := app.resolveJumpClient(host)
+			newSess, err := session.StartSessionWithBridge(context.Background(), host, tabTitle, app.settings.DefaultLogsDir, bridge, jumpClient)
+			glib.IdleAdd(func() {
+				if err != nil {
+					term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка подключения: ", "Connection error: ") + err.Error() + "\x1b[0m\r\n")
+					term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
+					term.SetDisconnected(true, reconnectFunc)
+					app.StatusLabel.SetText(i18n.T("Ошибка переподключения: ", "Reconnection error: ") + err.Error())
+					return
+				}
+
+				app.manager.Register(newSess)
+
+				app.TabView.UpdateSessionForTerminal(term, newSess)
+
+				term.OnResize = func(rows, cols int) {
+					newSess.Resize(rows, cols)
+				}
+				rows := term.GetRowCount()
+				cols := term.GetColumnCount()
+				if rows > 0 && cols > 0 {
+					newSess.Resize(rows, cols)
+				}
+
+				if newSess.SFTPClient != nil {
+					app.SFTPPanel.AttachClient(newSess.ID, host.ID, newSess.SFTPClient, app.settings.DefaultEditor)
+				}
+
+				app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
+				log.Printf("[APP] Reconnected session for: %s (new sessionID=%s)", host.Name, newSess.ID)
+
+				if app.settings.AutoRestoreSessions {
+					app.SaveAllSessionState()
+				}
+
+				app.attachSessionExitHandler(newSess, term, host, tabTitle)
+			})
+		}()
+	}
+
+	term.SetDisconnected(true, reconnectFunc)
+	if sess != nil {
+		app.TabView.UpdateTabTitleForSession(sess)
+	}
+}
+
 // attachSessionExitHandler monitors session termination and prompts user to reconnect via Enter
 func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.Terminal, host *storage.Host, tabTitle string) {
 	if sess == nil || term == nil || host == nil {
@@ -1870,71 +2010,7 @@ func (app *AppWindow) attachSessionExitHandler(sess *session.Session, term *vte.
 			if app.TabView.FindTabBySession(sess) == nil {
 				return
 			}
-
-			// Show yellow disconnect prompt in terminal buffer
-			term.FeedText("\r\n\r\n\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
-			app.StatusLabel.SetText(i18n.Tf("Сессия %s закрыта", "Session %s closed", host.Name))
-
-			var reconnectFunc func()
-			reconnectFunc = func() {
-				term.SetDisconnected(false, nil)
-				term.FeedText("\r\n\x1b[1;36m" + i18n.T("[Переподключение...]", "[Reconnecting...]") + "\x1b[0m\r\n")
-				app.StatusLabel.SetText(i18n.Tf("Переподключение к %s...", "Reconnecting to %s...", host.Host))
-
-				slaveFile, err := term.SetupNativePTY()
-				if err != nil {
-					term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка инициализации PTY: ", "PTY initialization error: ") + err.Error() + "\x1b[0m\r\n")
-					term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
-					term.SetDisconnected(true, reconnectFunc)
-					return
-				}
-
-				bridge := pty.FromSlave(slaveFile)
-				go func() {
-					_ = sess.Close()
-					app.manager.Unregister(sess.ID)
-					jumpClient := app.resolveJumpClient(host)
-					newSess, err := session.StartSessionWithBridge(context.Background(), host, tabTitle, app.settings.DefaultLogsDir, bridge, jumpClient)
-					glib.IdleAdd(func() {
-						if err != nil {
-							term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка подключения: ", "Connection error: ") + err.Error() + "\x1b[0m\r\n")
-							term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
-							term.SetDisconnected(true, reconnectFunc)
-							app.StatusLabel.SetText(i18n.T("Ошибка переподключения: ", "Reconnection error: ") + err.Error())
-							return
-						}
-
-						app.manager.Register(newSess)
-
-						app.TabView.UpdateSessionForTerminal(term, newSess)
-
-						term.OnResize = func(rows, cols int) {
-							newSess.Resize(rows, cols)
-						}
-						rows := term.GetRowCount()
-						cols := term.GetColumnCount()
-						if rows > 0 && cols > 0 {
-							newSess.Resize(rows, cols)
-						}
-
-						if newSess.SFTPClient != nil {
-							app.SFTPPanel.AttachClient(newSess.ID, host.ID, newSess.SFTPClient, app.settings.DefaultEditor)
-						}
-
-						app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
-						log.Printf("[APP] Reconnected session for: %s (new sessionID=%s)", host.Name, newSess.ID)
-
-						if app.settings.AutoRestoreSessions {
-							app.SaveAllSessionState()
-						}
-
-						app.attachSessionExitHandler(newSess, term, host, tabTitle)
-					})
-				}()
-			}
-
-			term.SetDisconnected(true, reconnectFunc)
-			app.TabView.UpdateTabTitleForSession(sess)
+			app.setSessionDisconnected(sess, term, host, tabTitle, exitErr)
 		})
 	}
 }

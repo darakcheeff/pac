@@ -93,34 +93,26 @@ func (c *Client) SetCurrentDir(dir string) {
 	c.currentDir = dir
 }
 
-// ListDir returns list of files/folders in remote directory
-func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.closed {
-		return nil, fmt.Errorf("client is closed")
-	}
-
+// resolvePath expands ~ and ~/ based on current or home directory
+func (c *Client) resolvePath(remotePath string) string {
 	if remotePath == "" {
-		remotePath = c.currentDir
+		return c.currentDir
 	}
 
 	if remotePath == "~" {
 		if c.isLocal {
 			if h, err := os.UserHomeDir(); err == nil && h != "" {
-				remotePath = h
+				return h
 			}
 		} else if c.sftpClient != nil {
 			if pwd, err := c.sftpClient.Getwd(); err == nil && pwd != "" {
-				remotePath = pwd
-			} else {
-				remotePath = c.currentDir
+				return pwd
 			}
-		} else {
-			remotePath = c.currentDir
 		}
-	} else if strings.HasPrefix(remotePath, "~/") {
+		return c.currentDir
+	}
+
+	if strings.HasPrefix(remotePath, "~/") {
 		base := c.currentDir
 		if c.isLocal {
 			if h, err := os.UserHomeDir(); err == nil && h != "" {
@@ -131,8 +123,22 @@ func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 				base = pwd
 			}
 		}
-		remotePath = path.Join(base, strings.TrimPrefix(remotePath, "~/"))
+		return path.Join(base, strings.TrimPrefix(remotePath, "~/"))
 	}
+
+	return remotePath
+}
+
+// ListDir returns list of files/folders in remote directory
+func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.closed {
+		return nil, fmt.Errorf("client is closed")
+	}
+
+	remotePath = c.resolvePath(remotePath)
 
 	if c.isLocal {
 		entries, err := os.ReadDir(remotePath)
@@ -170,7 +176,7 @@ func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 	for _, entry := range entries {
 		items = append(items, FileItem{
 			Name:    entry.Name(),
-			Path:    filepath.Join(remotePath, entry.Name()),
+			Path:    path.Join(remotePath, entry.Name()),
 			Size:    entry.Size(),
 			Mode:    entry.Mode(),
 			ModTime: entry.ModTime(),
@@ -188,6 +194,8 @@ func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string,
 	if c.closed {
 		return fmt.Errorf("client is closed")
 	}
+
+	remotePath = c.resolvePath(remotePath)
 
 	if c.isLocal {
 		src, err := os.Open(remotePath)
@@ -248,6 +256,8 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 		return fmt.Errorf("sftp client is closed")
 	}
 
+	remotePath = c.resolvePath(remotePath)
+
 	src, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("failed to open local file: %w", err)
@@ -285,6 +295,7 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 func (c *Client) Mkdir(remotePath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	remotePath = c.resolvePath(remotePath)
 	if c.isLocal {
 		return os.MkdirAll(remotePath, 0755)
 	}
@@ -298,6 +309,7 @@ func (c *Client) Mkdir(remotePath string) error {
 func (c *Client) Remove(remotePath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	remotePath = c.resolvePath(remotePath)
 	if c.isLocal {
 		return os.RemoveAll(remotePath)
 	}
@@ -316,6 +328,7 @@ func (c *Client) Remove(remotePath string) error {
 }
 
 func (c *Client) removeRecursive(remotePath string) error {
+	remotePath = c.resolvePath(remotePath)
 	entries, err := c.sftpClient.ReadDir(remotePath)
 	if err != nil {
 		return err
@@ -339,6 +352,8 @@ func (c *Client) removeRecursive(remotePath string) error {
 func (c *Client) Rename(oldPath, newPath string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	oldPath = c.resolvePath(oldPath)
+	newPath = c.resolvePath(newPath)
 	if c.isLocal {
 		return os.Rename(oldPath, newPath)
 	}
@@ -352,6 +367,7 @@ func (c *Client) Rename(oldPath, newPath string) error {
 func (c *Client) Chmod(remotePath string, mode os.FileMode) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	remotePath = c.resolvePath(remotePath)
 	if c.isLocal {
 		return os.Chmod(remotePath, mode)
 	}
