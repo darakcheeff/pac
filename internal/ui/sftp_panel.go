@@ -273,6 +273,7 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 	cancelBtn, _ := gtk.ButtonNew()
 	cancelBtn.SetTooltipText(i18n.T("Отменить передачу", "Cancel transfer"))
 	cancelBtn.SetRelief(gtk.RELIEF_NONE)
+	cancelBtn.SetCanFocus(false)
 	cancelLbl, _ := gtk.LabelNew("")
 	cancelLbl.SetMarkup("<span color='#e74c3c' font_weight='bold'>✕</span>")
 	cancelBtn.Add(cancelLbl)
@@ -402,18 +403,28 @@ func NewSFTPPanel(watcherMgr *watcher.RemoteEditManager) (*SFTPPanel, error) {
 			if destDir == "" {
 				destDir = joinRemotePath(currDir, targetFolder)
 			}
-			glib.IdleAdd(func() {
+			go func() {
 				lines := strings.Split(text, "\n")
+				var hadError bool
 				for _, l := range lines {
 					fName := strings.TrimSpace(l)
-					if fName != "" && fName != targetFolder {
-						oldPath := joinRemotePath(currDir, fName)
-						newPath := joinRemotePath(destDir, fName)
-						_ = panel.client.Rename(oldPath, newPath)
+					baseName := remoteBaseName(fName)
+					if baseName != "" && baseName != targetFolder {
+						oldPath := joinRemotePath(currDir, baseName)
+						newPath := joinRemotePath(destDir, baseName)
+						if err := panel.client.Rename(oldPath, newPath); err != nil {
+							hadError = true
+							log.Printf("[SFTP] Error moving %s -> %s: %v", oldPath, newPath, err)
+						}
 					}
 				}
-				panel.LoadDirectory(currDir)
-			})
+				glib.IdleAdd(func() {
+					panel.LoadDirectory(currDir)
+					if hadError {
+						panel.StatusLabel.SetText(i18n.T("Ошибка при перемещении некоторых файлов", "Error moving some files"))
+					}
+				})
+			}()
 		}
 	})
 
@@ -1059,14 +1070,18 @@ func (sp *SFTPPanel) showCreateFolderDialog() {
 		if folderName != "" {
 			currDir := sp.GetCurrentDir()
 			newPath := joinRemotePath(currDir, folderName)
-			err := sp.client.Mkdir(newPath)
-			if err == nil {
-				sp.LoadDirectory(currDir)
-			} else {
-				sp.StatusLabel.SetText(i18n.T("Ошибка создания папки: ", "Folder creation error: ") + err.Error())
-				sp.showError(i18n.T("Ошибка создания папки", "Folder Creation Error"),
-					i18n.Tf("Не удалось создать папку \"%s\":\n\n%s", "Failed to create folder \"%s\":\n\n%s", folderName, err.Error()))
-			}
+			go func() {
+				err := sp.client.Mkdir(newPath)
+				glib.IdleAdd(func() {
+					if err == nil {
+						sp.LoadDirectory(currDir)
+					} else {
+						sp.StatusLabel.SetText(i18n.T("Ошибка создания папки: ", "Folder creation error: ") + err.Error())
+						sp.showError(i18n.T("Ошибка создания папки", "Folder Creation Error"),
+							i18n.Tf("Не удалось создать папку \"%s\":\n\n%s", "Failed to create folder \"%s\":\n\n%s", folderName, err.Error()))
+					}
+				})
+			}()
 		}
 	}
 	dlg.Destroy()
@@ -1116,14 +1131,19 @@ func (sp *SFTPPanel) showRenameDialog(oldName, oldPath string) {
 		if newName != "" && newName != oldName {
 			currDir := parentOf(oldPath)
 			newPath := joinRemotePath(currDir, newName)
-			err := sp.client.Rename(oldPath, newPath)
-			if err == nil {
-				sp.LoadDirectory(sp.GetCurrentDir())
-			} else {
-				sp.StatusLabel.SetText(i18n.T("Ошибка переименования: ", "Rename error: ") + err.Error())
-				sp.showError(i18n.T("Ошибка переименования", "Rename Error"),
-					i18n.Tf("Не удалось переименовать \"%s\" в \"%s\":\n\n%s", "Failed to rename \"%s\" to \"%s\":\n\n%s", oldName, newName, err.Error()))
-			}
+			viewDir := sp.GetCurrentDir()
+			go func() {
+				err := sp.client.Rename(oldPath, newPath)
+				glib.IdleAdd(func() {
+					if err == nil {
+						sp.LoadDirectory(viewDir)
+					} else {
+						sp.StatusLabel.SetText(i18n.T("Ошибка переименования: ", "Rename error: ") + err.Error())
+						sp.showError(i18n.T("Ошибка переименования", "Rename Error"),
+							i18n.Tf("Не удалось переименовать \"%s\" в \"%s\":\n\n%s", "Failed to rename \"%s\" to \"%s\":\n\n%s", oldName, newName, err.Error()))
+					}
+				})
+			}()
 		}
 	}
 	dlg.Destroy()
@@ -1506,7 +1526,7 @@ func (sp *SFTPPanel) showEmptyAreaContextMenu(eventTime uint32) {
 
 	mRefresh, _ := gtk.MenuItemNewWithLabel(i18n.T("Обновить каталог (F5)", "Refresh directory (F5)"))
 	mRefresh.Connect("activate", func() {
-		sp.LoadDirectory(sp.client.CurrentDir())
+		sp.LoadDirectory(sp.GetCurrentDir())
 	})
 	menu.Append(mRefresh)
 

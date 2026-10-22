@@ -189,15 +189,17 @@ func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 // DownloadFile downloads remote file to local path with progress
 func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string, cb ProgressCallback) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	if c.closed {
+		c.mu.RUnlock()
 		return fmt.Errorf("client is closed")
 	}
 
 	remotePath = c.resolvePath(remotePath)
+	isLocal := c.isLocal
+	sftpClient := c.sftpClient
+	c.mu.RUnlock()
 
-	if c.isLocal {
+	if isLocal {
 		src, err := os.Open(remotePath)
 		if err != nil {
 			return err
@@ -218,11 +220,11 @@ func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string,
 		return copyWithProgress(ctx, dst, src, stat.Size(), cb)
 	}
 
-	if c.sftpClient == nil {
+	if sftpClient == nil {
 		return fmt.Errorf("sftp client is closed")
 	}
 
-	src, err := c.sftpClient.Open(remotePath)
+	src, err := sftpClient.Open(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to open remote file: %w", err)
 	}
@@ -250,13 +252,19 @@ func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string,
 // UploadFile uploads local file to remote path with progress
 func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, cb ProgressCallback) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.closed || c.sftpClient == nil {
-		return fmt.Errorf("sftp client is closed")
+	if c.closed {
+		c.mu.RUnlock()
+		return fmt.Errorf("client is closed")
 	}
 
 	remotePath = c.resolvePath(remotePath)
+	isLocal := c.isLocal
+	sftpClient := c.sftpClient
+	c.mu.RUnlock()
+
+	if !isLocal && sftpClient == nil {
+		return fmt.Errorf("sftp client is closed")
+	}
 
 	src, err := os.Open(localPath)
 	if err != nil {
@@ -270,7 +278,7 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 	}
 	totalSize := stat.Size()
 
-	if c.isLocal {
+	if isLocal {
 		if err := os.MkdirAll(filepath.Dir(remotePath), 0755); err != nil {
 			return err
 		}
@@ -282,7 +290,7 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 		return copyWithProgress(ctx, dst, src, totalSize, cb)
 	}
 
-	dst, err := c.sftpClient.Create(remotePath)
+	dst, err := sftpClient.Create(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %w", err)
 	}

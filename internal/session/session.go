@@ -155,12 +155,19 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 
 	// Setup Directory Tracker
 	sess.Tracker = sftp.NewDirectoryTracker(func(path string) {
-		if sess.SFTPClient != nil {
-			sess.SFTPClient.SetCurrentDir(path)
-		}
-		if sess.OnDirectoryChanged != nil {
-			sess.OnDirectoryChanged(path)
-		}
+		go func() {
+			sess.mu.Lock()
+			client := sess.SFTPClient
+			cb := sess.OnDirectoryChanged
+			sess.mu.Unlock()
+
+			if client != nil {
+				client.SetCurrentDir(path)
+			}
+			if cb != nil {
+				cb(path)
+			}
+		}()
 	})
 
 	sess.Splitter = &StreamSplitter{
