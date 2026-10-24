@@ -76,6 +76,35 @@ type Host struct {
 	SerialDataBits int    `json:"serial_data_bits"`
 	SerialStopBits int    `json:"serial_stop_bits"`
 	SerialParity   string `json:"serial_parity"`
+	SerialAutoBaud bool   `json:"serial_auto_baud"`
+
+	// RDP options
+	RDPDomain         string `json:"rdp_domain"`
+	RDPResolution     string `json:"rdp_resolution"` // "dynamic", "1920x1080", etc.
+	RDPColorDepth     int    `json:"rdp_color_depth"` // 16, 24, 32
+	RDPClipboard      bool   `json:"rdp_clipboard"`
+	RDPSound          string `json:"rdp_sound"` // "pulse", "alsa", "off"
+	RDPMicrophone     bool   `json:"rdp_microphone"`
+	RDPSharedFolder   string `json:"rdp_shared_folder"`
+	RDPIgnoreCert     bool   `json:"rdp_ignore_cert"`
+	RDPPerformance    string `json:"rdp_performance"` // "lan", "wan"
+	RDPFontSmoothing  bool   `json:"rdp_font_smoothing"`
+	RDPEmbedded       bool   `json:"rdp_embedded"` // true: in tab, false: separate window
+	RDGatewayServer   string `json:"rd_gateway_server"`
+	RDGatewayUsername string `json:"rd_gateway_username"`
+	RDGatewayPassword string `json:"rd_gateway_password"`
+	RDGatewayDomain   string `json:"rd_gateway_domain"`
+
+	// VNC options
+	VNCPort        int    `json:"vnc_port"`
+	VNCPassword    string `json:"vnc_password,omitempty"`
+	VNCEmbedded    bool   `json:"vnc_embedded"` // true: in tab, false: separate window
+	VNCViewOnly    bool   `json:"vnc_view_only"`
+	VNCShared      bool   `json:"vnc_shared"`
+	VNCScale       bool   `json:"vnc_scale"`
+	VNCQuality     int    `json:"vnc_quality"`     // 0-9
+	VNCCompression int    `json:"vnc_compression"` // 0-9
+	VNCEncoding    string `json:"vnc_encoding"`    // "auto", "tight", "zrle", "hextile", "raw"
 
 	// Terminal / Appearance options
 	TerminalType    string `json:"terminal_type"`

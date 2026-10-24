@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"os/user"
 	"path"
 	"sort"
 	"strconv"
@@ -17,8 +19,10 @@ import (
 	"time"
 
 	"github.com/darakcheeff/pac/internal/engine/pty"
+	"github.com/darakcheeff/pac/internal/engine/rdp"
 	"github.com/darakcheeff/pac/internal/engine/sftp"
 	engineSSH "github.com/darakcheeff/pac/internal/engine/ssh"
+	"github.com/darakcheeff/pac/internal/engine/vnc"
 	"github.com/darakcheeff/pac/internal/engine/watcher"
 	"github.com/darakcheeff/pac/internal/i18n"
 	"github.com/darakcheeff/pac/internal/migration"
@@ -64,6 +68,7 @@ type AppWindow struct {
 	btnExit       *gtk.ToolButton
 	themeProvider *gtk.CssProvider
 	trayIcon      *TrayIcon
+	activeBaudBars map[string]*gtk.InfoBar
 }
 
 
@@ -620,6 +625,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		watcherMgr:   watcherMgr,
 		settings:     settings,
 		isRestoring:  true, // Prevent overwriting state before restore completes
+		activeBaudBars: make(map[string]*gtk.InfoBar),
 	}
 
 	app.setupMenuAndToolbar()
@@ -1020,6 +1026,12 @@ func (app *AppWindow) setupSignals() {
 	app.TabView.OnTabClosed = func(sess *session.Session) {
 		if sess != nil {
 			log.Printf("[APP] Tab closed: %s (ID=%s)", sess.Title, sess.ID)
+			if app.activeBaudBars != nil {
+				if bar, ok := app.activeBaudBars[sess.ID]; ok && bar != nil {
+					bar.Destroy()
+					delete(app.activeBaudBars, sess.ID)
+				}
+			}
 			app.manager.Unregister(sess.ID)
 			app.SFTPPanel.RemoveSession(sess.ID)
 			if app.settings.AutoRestoreSessions {
@@ -1222,6 +1234,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			}
 
 			app.attachSessionExitHandler(newSess, term, targetHost, tab.Session.Title)
+			app.wireSerialAutoBaud(newSess, targetHost, term)
 		})
 	}()
 }
@@ -1241,6 +1254,14 @@ func (app *AppWindow) OpenLocalTerminal() {
 // ConnectToHost opens a new session and attaches it to a new tab
 func (app *AppWindow) ConnectToHost(host *storage.Host) {
 	log.Printf("[APP] ConnectToHost initiated for: %s (%s:%d, proto=%s)", host.Name, host.Host, host.Port, host.Protocol)
+	if host.Protocol == storage.ProtoRDP {
+		app.connectToRDP(host)
+		return
+	}
+	if host.Protocol == storage.ProtoVNC {
+		app.connectToVNC(host)
+		return
+	}
 	app.StatusLabel.SetText(i18n.Tf("Подключение к %s...", "Connecting to %s...", host.Host))
 
 	term, err := vte.NewTerminal()
@@ -1285,16 +1306,12 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 				app.StatusLabel.SetText(i18n.T("Ошибка подключения: ", "Connection error: ") + errMsg)
 				log.Printf("[APP] ERROR connecting to host %s: %v", host.Name, err)
 
-				detail := errMsg
 				if host.Protocol == storage.ProtoSerial && strings.Contains(strings.ToLower(errMsg), "permission denied") {
-					hint := i18n.T(
-						"Подсказка: добавьте пользователя в группу dialout:\nsudo usermod -aG dialout $USER\n(или проверьте права доступа к COM-порту)",
-						"Hint: Add user to dialout group:\nsudo usermod -aG dialout $USER\n(or check COM port permissions)",
-					)
-					detail = fmt.Sprintf("%s\n\n%s", detail, hint)
+					app.showSerialPermissionDialog(host, errMsg)
+					return
 				}
 
-				msgText := i18n.Tf("Не удалось подключиться к \"%s\":\n\n%s", "Failed to connect to \"%s\":\n\n%s", host.Name, detail)
+				msgText := i18n.Tf("Не удалось подключиться к \"%s\":\n\n%s", "Failed to connect to \"%s\":\n\n%s", host.Name, errMsg)
 				dlg := gtk.MessageDialogNew(
 					app.Window,
 					gtk.DIALOG_MODAL,
@@ -1333,8 +1350,183 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 			}
 
 			app.attachSessionExitHandler(sess, term, host, host.Name)
+			app.wireSerialAutoBaud(sess, host, term)
 		})
 	}()
+}
+
+// connectToRDP establishes a Remote Desktop connection either embedded in a tab or in a separate window
+func (app *AppWindow) connectToRDP(host *storage.Host) {
+	log.Printf("[APP] Initiating RDP connection to %s (%s:%d)", host.Name, host.Host, host.Port)
+	app.StatusLabel.SetText(i18n.Tf("Подключение по RDP к %s...", "Connecting via RDP to %s...", host.Host))
+
+	var jumpClient *cryptoSsh.Client
+	if host.ProxyJumpHost != "" {
+		log.Printf("[APP] ProxyJump configured for RDP: %s", host.ProxyJumpHost)
+		jumpClient = app.resolveJumpClient(host)
+	}
+
+	sess := &session.Session{
+		ID:    fmt.Sprintf("sess-%d", time.Now().UnixNano()),
+		Host:  host,
+		Title: host.Name,
+		Notes: host.Notes,
+	}
+
+	if host.RDPEmbedded {
+		socket, err := gtk.SocketNew()
+		if err != nil {
+			app.ShowError(i18n.T("Ошибка RDP", "RDP Error"), i18n.Tf("Не удалось создать контейнер окна RDP: %v", "Failed to create RDP window container: %v", err.Error()))
+			return
+		}
+		socket.SetHExpand(true)
+		socket.SetVExpand(true)
+
+		tabItem, err := app.TabView.AddRDPTab(sess, socket)
+		if err != nil {
+			app.ShowError(i18n.T("Ошибка вкладки", "Tab Error"), err.Error())
+			return
+		}
+		app.manager.Register(sess)
+		app.NotesPanel.LoadSessionNotes(sess)
+
+		socket.Show()
+		socket.Realize()
+		xid := socket.GetId()
+		log.Printf("[APP] Embedded RDP socket realized with XID=0x%x", xid)
+
+		go func() {
+			rdpSess, err := rdp.ConnectRDP(context.Background(), host, xid, jumpClient)
+			glib.IdleAdd(func() {
+				if err != nil {
+					app.StatusLabel.SetText(i18n.T("Ошибка подключения RDP: ", "RDP connection error: ") + err.Error())
+					app.ShowError(i18n.T("Ошибка подключения RDP", "RDP Connection Error"), err.Error())
+					app.TabView.CloseTab(tabItem)
+					return
+				}
+				sess.RDPSession = rdpSess
+				app.StatusLabel.SetText(i18n.Tf("Подключено (RDP): %s", "Connected (RDP): %s", host.Name))
+
+				rdpSess.OnExit = func(exitErr error) {
+					glib.IdleAdd(func() {
+						log.Printf("[APP] RDP session %s exited: %v", host.Name, exitErr)
+						app.StatusLabel.SetText(i18n.Tf("RDP сессия %s завершена", "RDP session %s closed", host.Name))
+						app.TabView.CloseTab(tabItem)
+					})
+				}
+			})
+		}()
+	} else {
+		// Launch in separate standalone window
+		go func() {
+			rdpSess, err := rdp.ConnectRDP(context.Background(), host, 0, jumpClient)
+			glib.IdleAdd(func() {
+				if err != nil {
+					app.StatusLabel.SetText(i18n.T("Ошибка запуска RDP: ", "RDP launch error: ") + err.Error())
+					app.ShowError(i18n.T("Ошибка RDP", "RDP Error"), err.Error())
+					return
+				}
+				sess.RDPSession = rdpSess
+				app.manager.Register(sess)
+				app.StatusLabel.SetText(i18n.Tf("Запущена RDP сессия (окно): %s", "RDP window session started: %s", host.Name))
+
+				rdpSess.OnExit = func(exitErr error) {
+					glib.IdleAdd(func() {
+						log.Printf("[APP] Standalone RDP session %s exited: %v", host.Name, exitErr)
+						app.manager.Unregister(sess.ID)
+						app.StatusLabel.SetText(i18n.Tf("RDP сессия %s завершена", "RDP session %s closed", host.Name))
+					})
+				}
+			})
+		}()
+	}
+}
+
+// connectToVNC establishes a Virtual Network Computing (VNC) connection either embedded in a tab or in a separate window
+func (app *AppWindow) connectToVNC(host *storage.Host) {
+	log.Printf("[APP] Initiating VNC connection to %s (%s:%d)", host.Name, host.Host, host.Port)
+	app.StatusLabel.SetText(i18n.Tf("Подключение по VNC к %s...", "Connecting via VNC to %s...", host.Host))
+
+	var jumpClient *cryptoSsh.Client
+	if host.ProxyJumpHost != "" {
+		log.Printf("[APP] ProxyJump configured for VNC: %s", host.ProxyJumpHost)
+		jumpClient = app.resolveJumpClient(host)
+	}
+
+	sess := &session.Session{
+		ID:    fmt.Sprintf("sess-%d", time.Now().UnixNano()),
+		Host:  host,
+		Title: host.Name,
+		Notes: host.Notes,
+	}
+
+	if host.VNCEmbedded {
+		socket, err := gtk.SocketNew()
+		if err != nil {
+			app.ShowError(i18n.T("Ошибка VNC", "VNC Error"), i18n.Tf("Не удалось создать контейнер окна VNC: %v", "Failed to create VNC window container: %v", err.Error()))
+			return
+		}
+		socket.SetHExpand(true)
+		socket.SetVExpand(true)
+
+		tabItem, err := app.TabView.AddVNCTab(sess, socket)
+		if err != nil {
+			app.ShowError(i18n.T("Ошибка вкладки", "Tab Error"), err.Error())
+			return
+		}
+		app.manager.Register(sess)
+		app.NotesPanel.LoadSessionNotes(sess)
+
+		socket.Show()
+		socket.Realize()
+		xid := socket.GetId()
+		log.Printf("[APP] Embedded VNC socket realized with XID=0x%x", xid)
+
+		go func() {
+			vncSess, err := vnc.ConnectVNC(context.Background(), host, xid, jumpClient)
+			glib.IdleAdd(func() {
+				if err != nil {
+					app.StatusLabel.SetText(i18n.T("Ошибка подключения VNC: ", "VNC connection error: ") + err.Error())
+					app.ShowError(i18n.T("Ошибка подключения VNC", "VNC Connection Error"), err.Error())
+					app.TabView.CloseTab(tabItem)
+					return
+				}
+				sess.VNCSession = vncSess
+				app.StatusLabel.SetText(i18n.Tf("Подключено (VNC): %s", "Connected (VNC): %s", host.Name))
+
+				vncSess.OnExit = func(exitErr error) {
+					glib.IdleAdd(func() {
+						log.Printf("[APP] VNC session %s exited: %v", host.Name, exitErr)
+						app.StatusLabel.SetText(i18n.Tf("VNC сессия %s завершена", "VNC session %s closed", host.Name))
+						app.TabView.CloseTab(tabItem)
+					})
+				}
+			})
+		}()
+	} else {
+		// Launch in separate standalone window
+		go func() {
+			vncSess, err := vnc.ConnectVNC(context.Background(), host, 0, jumpClient)
+			glib.IdleAdd(func() {
+				if err != nil {
+					app.StatusLabel.SetText(i18n.T("Ошибка запуска VNC: ", "VNC launch error: ") + err.Error())
+					app.ShowError(i18n.T("Ошибка VNC", "VNC Error"), err.Error())
+					return
+				}
+				sess.VNCSession = vncSess
+				app.manager.Register(sess)
+				app.StatusLabel.SetText(i18n.Tf("Запущена VNC сессия (окно): %s", "VNC window session started: %s", host.Name))
+
+				vncSess.OnExit = func(exitErr error) {
+					glib.IdleAdd(func() {
+						log.Printf("[APP] Standalone VNC session %s exited: %v", host.Name, exitErr)
+						app.manager.Unregister(sess.ID)
+						app.StatusLabel.SetText(i18n.Tf("VNC сессия %s завершена", "VNC session %s closed", host.Name))
+					})
+				}
+			})
+		}()
+	}
 }
 
 // RestoreSavedSessions restores tabs and nested split panes from database
@@ -1540,6 +1732,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 				}
 
 				app.attachSessionExitHandler(sess, term, hostCopy, savedState.Title)
+				app.wireSerialAutoBaud(sess, hostCopy, term)
 
 				finishSessionRestore()
 
@@ -1676,6 +1869,7 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 			isVertical := st.SplitDirection == "vertical" || st.SplitDirection == "left-right"
 			_ = app.TabView.SplitPane(tabItem, targetParent, sess, term, isVertical)
 			app.attachSessionExitHandler(sess, term, h, st.Title)
+			app.wireSerialAutoBaud(sess, h, term)
 		})
 	}()
 }
@@ -1979,12 +2173,19 @@ func (app *AppWindow) setSessionDisconnected(sess *session.Session, term *vte.Te
 				}
 
 				app.attachSessionExitHandler(newSess, term, host, tabTitle)
+				app.wireSerialAutoBaud(newSess, host, term)
 			})
 		}()
 	}
 
 	term.SetDisconnected(true, reconnectFunc)
 	if sess != nil {
+		if app.activeBaudBars != nil {
+			if bar, ok := app.activeBaudBars[sess.ID]; ok && bar != nil {
+				bar.Destroy()
+				delete(app.activeBaudBars, sess.ID)
+			}
+		}
 		app.TabView.UpdateTabTitleForSession(sess)
 	}
 }
@@ -2143,4 +2344,310 @@ func (app *AppWindow) ShowError(title, msg string) {
 	dlg.SetTitle(title)
 	dlg.Run()
 	dlg.Destroy()
+}
+
+// showSerialPermissionDialog shows an actionable dialog when serial port access is denied
+func (app *AppWindow) showSerialPermissionDialog(host *storage.Host, errMsg string) {
+	devPath := host.SerialPort
+	if devPath == "" {
+		devPath = host.Host
+	}
+	if devPath == "" {
+		devPath = "/dev/ttyUSB0"
+	}
+
+	username := os.Getenv("USER")
+	if username == "" {
+		if u, err := user.Current(); err == nil {
+			username = u.Username
+		} else {
+			username = "$USER"
+		}
+	}
+
+	cmdStr := fmt.Sprintf("sudo usermod -aG dialout %s && sudo chmod 666 %s", username, devPath)
+
+	dlg, err := gtk.DialogNew()
+	if err != nil {
+		app.ShowError(i18n.T("Ошибка подключения", "Connection Error"), errMsg)
+		return
+	}
+	dlg.SetTitle(i18n.T("Ошибка доступа к COM-порту", "Serial Port Access Error"))
+	dlg.SetTransientFor(app.Window)
+	dlg.SetModal(true)
+	dlg.SetDefaultSize(520, 240)
+
+	contentArea, err := dlg.GetContentArea()
+	if err != nil {
+		dlg.Destroy()
+		return
+	}
+	contentArea.SetSpacing(12)
+	contentArea.SetMarginStart(16)
+	contentArea.SetMarginEnd(16)
+	contentArea.SetMarginTop(16)
+	contentArea.SetMarginBottom(16)
+
+	// Top row: Error icon + Description
+	topBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 12)
+	img, _ := gtk.ImageNewFromIconName("dialog-error", gtk.ICON_SIZE_DIALOG)
+	topBox.PackStart(img, false, false, 0)
+
+	textBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 6)
+	titleLbl, _ := gtk.LabelNew("")
+	titleLbl.SetMarkup(fmt.Sprintf("<b><big>%s</big></b>", i18n.Tf("Не удалось открыть \"%s\"", "Failed to open \"%s\"", host.Name)))
+	titleLbl.SetXAlign(0)
+	titleLbl.SetLineWrap(true)
+	textBox.PackStart(titleLbl, false, false, 0)
+
+	descLbl, _ := gtk.LabelNew("")
+	descMarkup := fmt.Sprintf("%s\n\n<b>%s</b> %s",
+		errMsg,
+		i18n.T("Причина:", "Reason:"),
+		i18n.Tf("у пользователя '%s' нет прав доступа к порту '%s' (требуется членство в группе 'dialout').",
+			"user '%s' has no permission to access port '%s' (membership in 'dialout' group required).", username, devPath),
+	)
+	descLbl.SetMarkup(descMarkup)
+	descLbl.SetXAlign(0)
+	descLbl.SetLineWrap(true)
+	descLbl.SetSelectable(true)
+	textBox.PackStart(descLbl, false, false, 0)
+
+	topBox.PackStart(textBox, true, true, 0)
+	contentArea.Add(topBox)
+
+	// Separator
+	sep, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	contentArea.Add(sep)
+
+	// Command Section
+	cmdBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 6)
+	cmdTitle, _ := gtk.LabelNew(i18n.T("Команда для ручного выполнения в терминале:", "Command to run manually in terminal:"))
+	cmdTitle.SetXAlign(0)
+	cmdBox.PackStart(cmdTitle, false, false, 0)
+
+	cmdRow, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 6)
+	entry, _ := gtk.EntryNew()
+	entry.SetText(cmdStr)
+	entry.SetEditable(false)
+	entry.SetHExpand(true)
+	cmdRow.PackStart(entry, true, true, 0)
+
+	copyBtn, _ := gtk.ButtonNewWithLabel(i18n.T("📋 Скопировать", "📋 Copy"))
+	copyBtn.SetTooltipText(i18n.T("Скопировать команду в буфер обмена", "Copy command to clipboard"))
+	copyBtn.Connect("clicked", func() {
+		if clip, cErr := gtk.ClipboardGet(gdk.SELECTION_CLIPBOARD); cErr == nil && clip != nil {
+			clip.SetText(cmdStr)
+		}
+		if pClip, pErr := gtk.ClipboardGet(gdk.SELECTION_PRIMARY); pErr == nil && pClip != nil {
+			pClip.SetText(cmdStr)
+		}
+		copyBtn.SetLabel(i18n.T("✓ Скопировано!", "✓ Copied!"))
+		glib.TimeoutAdd(2000, func() bool {
+			copyBtn.SetLabel(i18n.T("📋 Скопировать", "📋 Copy"))
+			return false
+		})
+	})
+	cmdRow.PackStart(copyBtn, false, false, 0)
+	cmdBox.PackStart(cmdRow, false, false, 0)
+	contentArea.Add(cmdBox)
+
+	// Buttons
+	_, _ = dlg.AddButton(i18n.T("Закрыть", "Close"), gtk.RESPONSE_CLOSE)
+	btnApply, _ := dlg.AddButton(i18n.T("⚡ Исправить автоматически (sudo / Polkit)", "⚡ Fix Automatically (sudo / Polkit)"), gtk.RESPONSE_APPLY)
+	if btnApply != nil {
+		btnApply.SetCanDefault(true)
+		dlg.SetDefault(btnApply)
+		if styleCtx, sErr := btnApply.GetStyleContext(); sErr == nil {
+			styleCtx.AddClass("suggested-action")
+		}
+	}
+
+	dlg.ShowAll()
+
+	for {
+		resp := dlg.Run()
+		if resp != gtk.RESPONSE_APPLY {
+			dlg.Destroy()
+			return
+		}
+
+		fixSuccess := app.applySerialPortPermissions(dlg, username, devPath)
+		if fixSuccess {
+			dlg.Destroy()
+			app.StatusLabel.SetText(i18n.T("Права на COM-порт успешно настроены", "Serial port permissions configured successfully"))
+			// Automatically connect now that permissions are granted!
+			app.ConnectToHost(host)
+			return
+		}
+	}
+}
+
+func (app *AppWindow) applySerialPortPermissions(parent *gtk.Dialog, username, devPath string) bool {
+	// 1. Try pkexec (Polkit) if installed
+	if pkexecPath, err := exec.LookPath("pkexec"); err == nil && pkexecPath != "" {
+		cmdText := fmt.Sprintf("usermod -aG dialout %s && (chmod 666 %s || setfacl -m u:%s:rw %s)",
+			username, devPath, username, devPath)
+		cmd := exec.Command(pkexecPath, "sh", "-c", cmdText)
+		out, runErr := cmd.CombinedOutput()
+		if runErr == nil {
+			log.Printf("[APP] Serial permissions successfully applied via pkexec for %s (%s)", username, devPath)
+			return true
+		}
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			if exitErr.ExitCode() == 126 || exitErr.ExitCode() == 127 {
+				log.Printf("[APP] pkexec cancelled or dismissed by user")
+				return false
+			}
+		}
+		log.Printf("[APP] pkexec failed: %v, output: %s. Falling back to sudo prompt...", runErr, string(out))
+	}
+
+	// 2. Fallback to sudo with native PAC password dialog
+	sudoPath, err := exec.LookPath("sudo")
+	if err != nil {
+		app.ShowError(
+			i18n.T("Утилита sudo не найдена", "sudo not found"),
+			i18n.T("В системе не найдены ни pkexec, ни sudo для получения прав root.", "Neither pkexec nor sudo were found on the system to gain root privileges."))
+		return false
+	}
+
+	pwDlg, _ := gtk.DialogNew()
+	pwDlg.SetTitle(i18n.T("Требуются права root (sudo)", "Root Privileges Required (sudo)"))
+	pwDlg.SetTransientFor(parent)
+	pwDlg.SetModal(true)
+	pwDlg.SetDefaultSize(380, 140)
+
+	cArea, _ := pwDlg.GetContentArea()
+	cArea.SetSpacing(8)
+	cArea.SetMarginStart(16)
+	cArea.SetMarginEnd(16)
+	cArea.SetMarginTop(16)
+	cArea.SetMarginBottom(16)
+
+	lbl, _ := gtk.LabelNew(i18n.Tf("Введите пароль пользователя '%s' для настройки прав на COM-порт:",
+		"Enter password for '%s' to configure COM port permissions:", username))
+	lbl.SetXAlign(0)
+	lbl.SetLineWrap(true)
+	cArea.Add(lbl)
+
+	pwEntry, _ := gtk.EntryNew()
+	pwEntry.SetVisibility(false)
+	pwEntry.SetActivatesDefault(true)
+	cArea.Add(pwEntry)
+
+	_, _ = pwDlg.AddButton(i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL)
+	okBtn, _ := pwDlg.AddButton(i18n.T("Применить", "Apply"), gtk.RESPONSE_OK)
+	if okBtn != nil {
+		okBtn.SetCanDefault(true)
+		pwDlg.SetDefault(okBtn)
+	}
+
+	pwDlg.ShowAll()
+	pwResp := pwDlg.Run()
+	password, _ := pwEntry.GetText()
+	pwDlg.Destroy()
+
+	if pwResp != gtk.RESPONSE_OK || password == "" {
+		return false
+	}
+
+	cmdText := fmt.Sprintf("usermod -aG dialout %s && (chmod 666 %s || setfacl -m u:%s:rw %s)",
+		username, devPath, username, devPath)
+	cmd := exec.Command(sudoPath, "-S", "-p", "", "sh", "-c", cmdText)
+	cmd.Stdin = strings.NewReader(password + "\n")
+	out, sErr := cmd.CombinedOutput()
+	if sErr != nil {
+		errStr := strings.TrimSpace(string(out))
+		if errStr == "" {
+			errStr = sErr.Error()
+		}
+		app.ShowError(
+			i18n.T("Ошибка sudo", "sudo Error"),
+			i18n.Tf("Не удалось применить права через sudo:\n\n%s", "Failed to apply permissions via sudo:\n\n%s", errStr))
+		return false
+	}
+
+	log.Printf("[APP] Serial permissions successfully applied via sudo for %s (%s)", username, devPath)
+	return true
+}
+
+// wireSerialAutoBaud attaches automatic baud rate detection handlers if configured
+func (app *AppWindow) wireSerialAutoBaud(sess *session.Session, host *storage.Host, term *vte.Terminal) {
+	if sess == nil || sess.SerialSession == nil || host == nil || !host.SerialAutoBaud {
+		return
+	}
+	sess.SerialSession.OnBaudRateDetected = func(detectedBaud, currentBaud int) {
+		glib.IdleAdd(func() {
+			app.showBaudRateSuggestion(sess, host, term, detectedBaud, currentBaud)
+		})
+	}
+}
+
+// showBaudRateSuggestion displays an InfoBar notification offering to switch serial baud rate
+func (app *AppWindow) showBaudRateSuggestion(sess *session.Session, host *storage.Host, term *vte.Terminal, detectedBaud, currentBaud int) {
+	if sess == nil || host == nil || term == nil {
+		return
+	}
+	pane := app.TabView.FindPaneBySession(sess)
+	if pane == nil || pane.Box == nil {
+		return
+	}
+
+	if app.activeBaudBars == nil {
+		app.activeBaudBars = make(map[string]*gtk.InfoBar)
+	}
+	if existing, ok := app.activeBaudBars[sess.ID]; ok && existing != nil {
+		existing.Destroy()
+		delete(app.activeBaudBars, sess.ID)
+	}
+
+	infoBar, err := gtk.InfoBarNew()
+	if err != nil {
+		return
+	}
+	infoBar.SetMessageType(gtk.MESSAGE_QUESTION)
+	infoBar.SetShowCloseButton(true)
+
+	contentArea, err := infoBar.GetContentArea()
+	if err == nil && contentArea != nil {
+		lbl, _ := gtk.LabelNew("")
+		msg := i18n.Tf(
+			"Обнаружены искаженные данные на COM-порту (текущая: %d бод). Рекомендуемая скорость: <b>%d бод</b>.",
+			"Garbage data detected on serial port (current: %d baud). Recommended baud rate: <b>%d baud</b>.",
+			currentBaud, detectedBaud,
+		)
+		lbl.SetMarkup(msg)
+		lbl.SetXAlign(0)
+		contentArea.Add(lbl)
+	}
+
+	infoBar.AddButton(i18n.Tf("⚡ Переключить на %d бод", "⚡ Switch to %d baud", detectedBaud), gtk.RESPONSE_APPLY)
+	infoBar.AddButton(i18n.T("Игнорировать", "Ignore"), gtk.RESPONSE_CANCEL)
+
+	infoBar.Connect("response", func(_ *gtk.InfoBar, resp gtk.ResponseType) {
+		if bar, ok := app.activeBaudBars[sess.ID]; ok && bar == infoBar {
+			delete(app.activeBaudBars, sess.ID)
+		}
+		infoBar.Destroy()
+
+		if resp == gtk.RESPONSE_APPLY {
+			if err := sess.SetSerialBaudRate(detectedBaud); err != nil {
+				app.StatusLabel.SetText(i18n.Tf("Ошибка смены скорости: %v", "Error switching baud rate: %v", err))
+				term.FeedText(fmt.Sprintf("\r\n\x1b[1;31m%s\x1b[0m\r\n",
+					i18n.Tf("[Ошибка смены скорости: %v]", "[Error switching baud rate: %v]", err)))
+				return
+			}
+			host.SerialBaudRate = detectedBaud
+			_ = app.store.SaveHost(host)
+			app.StatusLabel.SetText(i18n.Tf("Скорость COM-порта установлена в %d бод", "COM port baud rate set to %d baud", detectedBaud))
+			term.FeedText(fmt.Sprintf("\r\n\x1b[1;32m%s\x1b[0m\r\n",
+				i18n.Tf("[⚡ Скорость COM-порта успешно переключена на %d бод]", "[⚡ Serial baud rate successfully switched to %d baud]", detectedBaud)))
+		}
+	})
+
+	app.activeBaudBars[sess.ID] = infoBar
+	pane.Box.PackStart(infoBar, false, false, 0)
+	pane.Box.ReorderChild(infoBar, 0)
+	infoBar.ShowAll()
 }

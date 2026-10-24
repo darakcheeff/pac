@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -72,6 +73,7 @@ type SFTPPanel struct {
 	currentHostID string
 	currentSessID string
 	editorPref    string
+	lastLocalDir  string
 	sessions      map[string]*SessionSFTPData
 	sessMu        sync.Mutex
 }
@@ -886,23 +888,26 @@ func (sp *SFTPPanel) UploadLocalFile(localPath string) {
 }
 
 func (sp *SFTPPanel) showUploadFileChooser() {
-	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
-		i18n.T("Выберите файл для выгрузки на сервер", "Select file to upload"),
-		nil,
-		gtk.FILE_CHOOSER_ACTION_OPEN,
-		i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
-		i18n.T("Выгрузить", "Upload"), gtk.RESPONSE_ACCEPT,
-	)
-	dlg.SetSelectMultiple(true)
-	if dlg.Run() == gtk.RESPONSE_ACCEPT {
-		filenames, err := dlg.GetFilenames()
-		if err == nil {
-			for _, path := range filenames {
-				sp.UploadLocalFile(path)
-			}
+	initialDir := sp.lastLocalDir
+	if initialDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			initialDir = home
 		}
 	}
-	dlg.Destroy()
+
+	PickFilesOutOfProcess(
+		"open",
+		i18n.T("Выберите файл для выгрузки на сервер", "Select file to upload"),
+		initialDir,
+		"",
+		true,
+		func(paths []string) {
+			for _, path := range paths {
+				sp.lastLocalDir = filepath.Dir(path)
+				sp.UploadLocalFile(path)
+			}
+		},
+	)
 }
 
 func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
@@ -929,19 +934,25 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 		remotePath = joinRemotePath(sp.GetCurrentDir(), nameStr)
 	}
 
-	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
-		i18n.T("Сохранить файл на локальный компьютер", "Save file to local computer"),
-		nil,
-		gtk.FILE_CHOOSER_ACTION_SAVE,
-		i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
-		i18n.T("Скачать", "Download"), gtk.RESPONSE_ACCEPT,
-	)
-	dlg.SetCurrentName(nameStr)
-	dlg.SetDoOverwriteConfirmation(true)
+	initialDir := sp.lastLocalDir
+	if initialDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			initialDir = home
+		}
+	}
 
-	if dlg.Run() == gtk.RESPONSE_ACCEPT {
-		localPath := dlg.GetFilename()
-		dlg.Destroy()
+	PickFilesOutOfProcess(
+		"save",
+		i18n.T("Сохранить файл на локальный компьютер", "Save file to local computer"),
+		initialDir,
+		nameStr,
+		false,
+		func(paths []string) {
+			if len(paths) == 0 {
+				return
+			}
+			localPath := paths[0]
+			sp.lastLocalDir = filepath.Dir(localPath)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		sp.sessMu.Lock()
@@ -1026,9 +1037,7 @@ func (sp *SFTPPanel) downloadSelectedFile(iter *gtk.TreeIter) {
 				}
 			})
 		}()
-	} else {
-		dlg.Destroy()
-	}
+	})
 }
 
 func (sp *SFTPPanel) showCreateFolderDialog() {
@@ -1324,28 +1333,37 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 		return
 	}
 
-	dlg, _ := gtk.FileChooserDialogNewWith2Buttons(
-		i18n.T("Выберите папку для сохранения файлов", "Select destination folder to save files"),
-		nil,
-		gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
-		i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
-		i18n.T("Выбрать", "Select"), gtk.RESPONSE_ACCEPT,
-	)
-	if dlg.Run() == gtk.RESPONSE_ACCEPT {
-		targetDir := dlg.GetFilename()
-		dlg.Destroy()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		sp.sessMu.Lock()
-		sData.Transfer = SessionTransferState{
-			IsTransferring: true,
-			TransferType:   "download_multi",
-			FileName:       fmt.Sprintf("%d files", len(files)),
-			Fraction:       0.0,
-			StatusText:     i18n.T("Скачивание файлов...", "Downloading files..."),
-			CancelFunc:     cancel,
+	initialDir := sp.lastLocalDir
+	if initialDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			initialDir = home
 		}
-		sp.sessMu.Unlock()
+	}
+
+	PickFilesOutOfProcess(
+		"folder",
+		i18n.T("Выберите папку для сохранения файлов", "Select destination folder to save files"),
+		initialDir,
+		"",
+		false,
+		func(paths []string) {
+			if len(paths) == 0 {
+				return
+			}
+			targetDir := paths[0]
+			sp.lastLocalDir = targetDir
+
+			ctx, cancel := context.WithCancel(context.Background())
+			sp.sessMu.Lock()
+			sData.Transfer = SessionTransferState{
+				IsTransferring: true,
+				TransferType:   "download_multi",
+				FileName:       fmt.Sprintf("%d files", len(files)),
+				Fraction:       0.0,
+				StatusText:     i18n.T("Скачивание файлов...", "Downloading files..."),
+				CancelFunc:     cancel,
+			}
+			sp.sessMu.Unlock()
 
 		sp.StatusLabel.SetText(i18n.T("Скачивание файлов...", "Downloading files..."))
 		sp.ProgressBar.SetFraction(0.0)
@@ -1412,9 +1430,7 @@ func (sp *SFTPPanel) downloadMultipleFiles(files []sftpSelectedFile) {
 				}
 			})
 		}()
-	} else {
-		dlg.Destroy()
-	}
+	})
 }
 
 func (sp *SFTPPanel) showContextMenu(iter *gtk.TreeIter, eventTime uint32) {

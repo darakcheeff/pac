@@ -12,10 +12,12 @@ import (
 
 	"github.com/darakcheeff/pac/internal/engine/local"
 	"github.com/darakcheeff/pac/internal/engine/pty"
+	"github.com/darakcheeff/pac/internal/engine/rdp"
 	"github.com/darakcheeff/pac/internal/engine/serial"
 	"github.com/darakcheeff/pac/internal/engine/sftp"
 	"github.com/darakcheeff/pac/internal/engine/ssh"
 	"github.com/darakcheeff/pac/internal/engine/telnet"
+	"github.com/darakcheeff/pac/internal/engine/vnc"
 	"github.com/darakcheeff/pac/internal/storage"
 	cryptoSsh "golang.org/x/crypto/ssh"
 )
@@ -76,6 +78,8 @@ type Session struct {
 	TelnetSession *telnet.TelnetSession
 	SerialSession *serial.SerialSession
 	LocalSession  *local.LocalSession
+	RDPSession    *rdp.RDPSession
+	VNCSession    *vnc.VNCSession
 
 	OnExit func(err error)
 	OnDirectoryChanged func(path string)
@@ -364,6 +368,8 @@ func (s *Session) Close() error {
 	telnetSession := s.TelnetSession
 	serialSession := s.SerialSession
 	localSession := s.LocalSession
+	rdpSession := s.RDPSession
+	vncSession := s.VNCSession
 	ptyBridge := s.PTY
 	s.mu.Unlock()
 
@@ -388,6 +394,12 @@ func (s *Session) Close() error {
 	if localSession != nil {
 		_ = localSession.Close()
 	}
+	if rdpSession != nil {
+		_ = rdpSession.Close()
+	}
+	if vncSession != nil {
+		_ = vncSession.Close()
+	}
 	if ptyBridge != nil {
 		_ = ptyBridge.Close()
 	}
@@ -398,4 +410,28 @@ func (s *Session) NotifyDirectory(path string) {
 	if s.Tracker != nil {
 		s.Tracker.NotifyPath(path)
 	}
+}
+
+// SetSerialBaudRate dynamically changes baud rate of an active serial session
+func (s *Session) SetSerialBaudRate(newBaud int) error {
+	s.mu.Lock()
+	serialSess := s.SerialSession
+	s.mu.Unlock()
+
+	if serialSess == nil {
+		return fmt.Errorf("session is not a serial connection")
+	}
+	return serialSess.SetBaudRate(newBaud)
+}
+
+// CurrentSerialBaudRate returns active serial baud rate or 0
+func (s *Session) CurrentSerialBaudRate() int {
+	s.mu.Lock()
+	serialSess := s.SerialSession
+	s.mu.Unlock()
+
+	if serialSess == nil {
+		return 0
+	}
+	return serialSess.CurrentBaudRate()
 }

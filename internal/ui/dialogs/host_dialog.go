@@ -125,6 +125,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	comboProto.Append("telnet", "Telnet")
 	comboProto.Append("serial", i18n.T("Serial / COM-порт", "Serial / COM Port"))
 	comboProto.Append("local", i18n.T("Локальный терминал", "Local Terminal"))
+	comboProto.Append("rdp", "RDP (Remote Desktop)")
+	comboProto.Append("vnc", "VNC (Virtual Network Computing)")
 	comboProto.SetActiveID(string(host.Protocol))
 	topGrid.Attach(lblProto, 0, 2, 1, 1)
 	topGrid.Attach(comboProto, 1, 2, 1, 1)
@@ -254,6 +256,12 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	gridNet.Attach(lblParity, 0, 6, 1, 1)
 	gridNet.Attach(comboParity, 1, 6, 1, 1)
 
+	// Serial: Auto Baud
+	chkAutoBaud, _ := gtk.CheckButtonNewWithLabel(i18n.T("Автоопределение скорости при мусоре в потоке", "Auto-detect baud rate on garbage stream"))
+	chkAutoBaud.SetTooltipText(i18n.T("При обнаружении некорректного потока данных PAC автоматически подберёт правильную скорость и предложит применить её", "When garbage data stream is detected, PAC will automatically probe and suggest the correct baud rate"))
+	chkAutoBaud.SetActive(host.SerialAutoBaud)
+	gridNet.Attach(chkAutoBaud, 1, 7, 2, 1)
+
 	// Local Shell: Command
 	lblShell, _ := gtk.LabelNew(i18n.T("Командная оболочка:", "Command Shell:"))
 	lblShell.SetHAlign(gtk.ALIGN_END)
@@ -267,8 +275,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	} else {
 		entryShell.SetText(defShell)
 	}
-	gridNet.Attach(lblShell, 0, 7, 1, 1)
-	gridNet.Attach(entryShell, 1, 7, 2, 1)
+	gridNet.Attach(lblShell, 0, 8, 1, 1)
+	gridNet.Attach(entryShell, 1, 8, 2, 1)
 
 	// Local Shell: Working Directory
 	lblWorkDir, _ := gtk.LabelNew(i18n.T("Рабочая папка:", "Working Directory:"))
@@ -294,9 +302,9 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		}
 		fc.Destroy()
 	})
-	gridNet.Attach(lblWorkDir, 0, 8, 1, 1)
-	gridNet.Attach(entryWorkDir, 1, 8, 1, 1)
-	gridNet.Attach(btnBrowseWorkDir, 2, 8, 1, 1)
+	gridNet.Attach(lblWorkDir, 0, 9, 1, 1)
+	gridNet.Attach(entryWorkDir, 1, 9, 1, 1)
+	gridNet.Attach(btnBrowseWorkDir, 2, 9, 1, 1)
 
 	// Authentication fields on "Основное" tab
 	// Username
@@ -307,6 +315,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	entryUser.SetHExpand(true)
 	gridNet.Attach(lblUser, 0, 9, 1, 1)
 	gridNet.Attach(entryUser, 1, 9, 2, 1)
+
+	// RDP Domain
+	lblRDPDomain, _ := gtk.LabelNew(i18n.T("Домен Windows:", "Windows Domain:"))
+	lblRDPDomain.SetHAlign(gtk.ALIGN_END)
+	entryRDPDomain, _ := gtk.EntryNew()
+	entryRDPDomain.SetText(host.RDPDomain)
+	entryRDPDomain.SetPlaceholderText(i18n.T("Необязательно (например, WORKGROUP или CORP)", "Optional (e.g. WORKGROUP or CORP)"))
+	gridNet.Attach(lblRDPDomain, 0, 10, 1, 1)
+	gridNet.Attach(entryRDPDomain, 1, 10, 2, 1)
 
 	// Auth Method
 	lblAuthM, _ := gtk.LabelNew(i18n.T("Метод авторизации:", "Auth Method:"))
@@ -327,8 +344,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		curAuth = "key"
 	}
 	comboAuthM.SetActiveID(curAuth)
-	gridNet.Attach(lblAuthM, 0, 10, 1, 1)
-	gridNet.Attach(comboAuthM, 1, 10, 2, 1)
+	gridNet.Attach(lblAuthM, 0, 11, 1, 1)
+	gridNet.Attach(comboAuthM, 1, 11, 2, 1)
 
 	// Password
 	lblPass, _ := gtk.LabelNew(i18n.T("Пароль:", "Password:"))
@@ -341,9 +358,9 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	btnTogglePass.Connect("clicked", func() {
 		entryPass.SetVisibility(!entryPass.GetVisibility())
 	})
-	gridNet.Attach(lblPass, 0, 11, 1, 1)
-	gridNet.Attach(entryPass, 1, 11, 1, 1)
-	gridNet.Attach(btnTogglePass, 2, 11, 1, 1)
+	gridNet.Attach(lblPass, 0, 12, 1, 1)
+	gridNet.Attach(entryPass, 1, 12, 1, 1)
+	gridNet.Attach(btnTogglePass, 2, 12, 1, 1)
 
 	// Key Path
 	lblKey, _ := gtk.LabelNew(i18n.T("Файл SSH-ключа:", "SSH Key File:"))
@@ -365,9 +382,9 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		}
 		fc.Destroy()
 	})
-	gridNet.Attach(lblKey, 0, 12, 1, 1)
-	gridNet.Attach(entryKey, 1, 12, 1, 1)
-	gridNet.Attach(btnBrowseKey, 2, 12, 1, 1)
+	gridNet.Attach(lblKey, 0, 13, 1, 1)
+	gridNet.Attach(entryKey, 1, 13, 1, 1)
+	gridNet.Attach(btnBrowseKey, 2, 13, 1, 1)
 
 	// Key Passphrase
 	lblKeyPass, _ := gtk.LabelNew(i18n.T("Пароль к ключу:", "Key Passphrase:"))
@@ -375,8 +392,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	entryKeyPass, _ := gtk.EntryNew()
 	entryKeyPass.SetVisibility(false)
 	entryKeyPass.SetText(host.KeyPass)
-	gridNet.Attach(lblKeyPass, 0, 13, 1, 1)
-	gridNet.Attach(entryKeyPass, 1, 13, 2, 1)
+	gridNet.Attach(lblKeyPass, 0, 14, 1, 1)
+	gridNet.Attach(entryKeyPass, 1, 14, 2, 1)
 
 	tabNetLabel := createTabLabel(i18n.T("Основное", "General"))
 	notebook.AppendPage(gridNet, tabNetLabel)
@@ -546,6 +563,237 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	tabJumpLabel := createTabLabel(i18n.T("Туннелирование и сеть", "Tunnels & Network"))
 	notebook.AppendPage(gridJump, tabJumpLabel)
 
+	// --- Tab: RDP Settings ---
+	gridRDP, _ := gtk.GridNew()
+	gridRDP.SetRowSpacing(8)
+	gridRDP.SetColumnSpacing(8)
+	gridRDP.SetMarginStart(12)
+	gridRDP.SetMarginEnd(12)
+	gridRDP.SetMarginTop(12)
+	gridRDP.SetMarginBottom(12)
+
+	// Resolution
+	lblRDPRes, _ := gtk.LabelNew(i18n.T("Разрешение экрана:", "Display Resolution:"))
+	lblRDPRes.SetHAlign(gtk.ALIGN_END)
+	comboRDPRes, _ := gtk.ComboBoxTextNew()
+	comboRDPRes.Append("dynamic", i18n.T("Динамическое (по размеру вкладки)", "Dynamic (match tab size)"))
+	comboRDPRes.Append("1920x1080", "1920x1080 (Full HD)")
+	comboRDPRes.Append("2560x1440", "2560x1440 (2K QHD)")
+	comboRDPRes.Append("3840x2160", "3840x2160 (4K UHD)")
+	comboRDPRes.Append("1366x768", "1366x768 (Laptop)")
+	comboRDPRes.Append("1280x720", "1280x720 (HD)")
+	curRes := host.RDPResolution
+	if curRes == "" {
+		curRes = "dynamic"
+	}
+	comboRDPRes.SetActiveID(curRes)
+	gridRDP.Attach(lblRDPRes, 0, 0, 1, 1)
+	gridRDP.Attach(comboRDPRes, 1, 0, 2, 1)
+
+	// Color Depth
+	lblRDPDepth, _ := gtk.LabelNew(i18n.T("Глубина цвета:", "Color Depth:"))
+	lblRDPDepth.SetHAlign(gtk.ALIGN_END)
+	comboRDPDepth, _ := gtk.ComboBoxTextNew()
+	comboRDPDepth.Append("32", i18n.T("32 бит (True Color, максимальное качество)", "32 bit (True Color)"))
+	comboRDPDepth.Append("24", i18n.T("24 бит (Стандартное)", "24 bit (Standard)"))
+	comboRDPDepth.Append("16", i18n.T("16 бит (Высокая скорость / слабый канал)", "16 bit (High speed)"))
+	curDepth := host.RDPColorDepth
+	if curDepth == 0 {
+		curDepth = 32
+	}
+	comboRDPDepth.SetActiveID(strconv.Itoa(curDepth))
+	gridRDP.Attach(lblRDPDepth, 0, 1, 1, 1)
+	gridRDP.Attach(comboRDPDepth, 1, 1, 2, 1)
+
+	// Open Mode (Tab vs Window)
+	lblRDPMode, _ := gtk.LabelNew(i18n.T("Режим открытия:", "Open Mode:"))
+	lblRDPMode.SetHAlign(gtk.ALIGN_END)
+	comboRDPMode, _ := gtk.ComboBoxTextNew()
+	comboRDPMode.Append("tab", i18n.T("Вкладка PAC (интеграция в окно)", "PAC Tab (embedded)"))
+	comboRDPMode.Append("window", i18n.T("Отдельное окно (для нескольких экранов)", "Separate Window (multi-monitor)"))
+	if host.RDPEmbedded || host.Protocol != storage.ProtoRDP {
+		comboRDPMode.SetActiveID("tab")
+	} else {
+		comboRDPMode.SetActiveID("window")
+	}
+	gridRDP.Attach(lblRDPMode, 0, 2, 1, 1)
+	gridRDP.Attach(comboRDPMode, 1, 2, 2, 1)
+
+	// Checkboxes: Clipboard & Multimedia
+	chkRDPClipboard, _ := gtk.CheckButtonNewWithLabel(i18n.T("Двунаправленный буфер обмена (текст и файлы)", "Bi-directional clipboard (text & files)"))
+	chkRDPClipboard.SetActive(host.RDPClipboard || host.Protocol != storage.ProtoRDP)
+	gridRDP.Attach(chkRDPClipboard, 1, 3, 2, 1)
+
+	chkRDPSound, _ := gtk.CheckButtonNewWithLabel(i18n.T("Проброс звука с сервера (PulseAudio / PipeWire)", "Redirect sound from server (PulseAudio / PipeWire)"))
+	chkRDPSound.SetActive(host.RDPSound != "off")
+	gridRDP.Attach(chkRDPSound, 1, 4, 2, 1)
+
+	chkRDPMicrophone, _ := gtk.CheckButtonNewWithLabel(i18n.T("Проброс локального микрофона на сервер", "Redirect local microphone to server"))
+	chkRDPMicrophone.SetActive(host.RDPMicrophone)
+	gridRDP.Attach(chkRDPMicrophone, 1, 5, 2, 1)
+
+	chkRDPIgnoreCert, _ := gtk.CheckButtonNewWithLabel(i18n.T("Игнорировать ошибки сертификата SSL/TLS", "Ignore SSL/TLS certificate warnings"))
+	chkRDPIgnoreCert.SetActive(host.RDPIgnoreCert || host.Protocol != storage.ProtoRDP)
+	gridRDP.Attach(chkRDPIgnoreCert, 1, 6, 2, 1)
+
+	chkRDPFonts, _ := gtk.CheckButtonNewWithLabel(i18n.T("Сглаживание шрифтов (ClearType / Font Smoothing)", "Font Smoothing (ClearType)"))
+	chkRDPFonts.SetActive(host.RDPFontSmoothing || host.Protocol != storage.ProtoRDP)
+	gridRDP.Attach(chkRDPFonts, 1, 7, 2, 1)
+
+	// Shared Folder Redirection
+	lblRDPShared, _ := gtk.LabelNew(i18n.T("Общая папка диска:", "Shared Folder (Drive):"))
+	lblRDPShared.SetHAlign(gtk.ALIGN_END)
+	entryRDPShared, _ := gtk.EntryNew()
+	entryRDPShared.SetText(host.RDPSharedFolder)
+	entryRDPShared.SetPlaceholderText(i18n.T("Локальная папка для монтирования в сеанс", "Local folder to mount into remote session"))
+	btnBrowseRDPShared, _ := gtk.ButtonNewWithLabel(i18n.T("Обзор...", "Browse..."))
+	btnBrowseRDPShared.Connect("clicked", func() {
+		fc, err := gtk.FileChooserDialogNewWith2Buttons(
+			i18n.T("Выберите папку для проброса в RDP", "Select folder to redirect to RDP"),
+			parent,
+			gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
+			i18n.T("Отмена", "Cancel"), gtk.RESPONSE_CANCEL,
+			i18n.T("Выбрать", "Select"), gtk.RESPONSE_ACCEPT,
+		)
+		if err == nil {
+			if fc.Run() == gtk.RESPONSE_ACCEPT {
+				entryRDPShared.SetText(fc.GetFilename())
+			}
+			fc.Destroy()
+		}
+	})
+	gridRDP.Attach(lblRDPShared, 0, 8, 1, 1)
+	gridRDP.Attach(entryRDPShared, 1, 8, 1, 1)
+	gridRDP.Attach(btnBrowseRDPShared, 2, 8, 1, 1)
+
+	// Separator
+	sepGW, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	gridRDP.Attach(sepGW, 0, 9, 3, 1)
+
+	lblGWHeader, _ := gtk.LabelNew("")
+	lblGWHeader.SetMarkup(fmt.Sprintf("<b>%s</b>", i18n.T("Шлюз удаленных рабочих столов (Microsoft RD Gateway)", "Remote Desktop Gateway (Microsoft RD Gateway)")))
+	lblGWHeader.SetXAlign(0)
+	gridRDP.Attach(lblGWHeader, 0, 10, 3, 1)
+
+	lblGWServer, _ := gtk.LabelNew(i18n.T("Сервер шлюза:", "Gateway Server:"))
+	lblGWServer.SetHAlign(gtk.ALIGN_END)
+	entryGWServer, _ := gtk.EntryNew()
+	entryGWServer.SetText(host.RDGatewayServer)
+	entryGWServer.SetPlaceholderText("gateway.corp.com:443")
+	gridRDP.Attach(lblGWServer, 0, 11, 1, 1)
+	gridRDP.Attach(entryGWServer, 1, 11, 2, 1)
+
+	lblGWUser, _ := gtk.LabelNew(i18n.T("Пользователь шлюза:", "Gateway User:"))
+	lblGWUser.SetHAlign(gtk.ALIGN_END)
+	entryGWUser, _ := gtk.EntryNew()
+	entryGWUser.SetText(host.RDGatewayUsername)
+	gridRDP.Attach(lblGWUser, 0, 12, 1, 1)
+	gridRDP.Attach(entryGWUser, 1, 12, 2, 1)
+
+	lblGWPass, _ := gtk.LabelNew(i18n.T("Пароль шлюза:", "Gateway Password:"))
+	lblGWPass.SetHAlign(gtk.ALIGN_END)
+	entryGWPass, _ := gtk.EntryNew()
+	entryGWPass.SetVisibility(false)
+	entryGWPass.SetText(host.RDGatewayPassword)
+	gridRDP.Attach(lblGWPass, 0, 13, 1, 1)
+	gridRDP.Attach(entryGWPass, 1, 13, 2, 1)
+
+	lblGWDomain, _ := gtk.LabelNew(i18n.T("Домен шлюза:", "Gateway Domain:"))
+	lblGWDomain.SetHAlign(gtk.ALIGN_END)
+	entryGWDomain, _ := gtk.EntryNew()
+	entryGWDomain.SetText(host.RDGatewayDomain)
+	gridRDP.Attach(lblGWDomain, 0, 14, 1, 1)
+	gridRDP.Attach(entryGWDomain, 1, 14, 2, 1)
+
+	tabRDPLabel := createTabLabel(i18n.T("Параметры RDP", "RDP Settings"))
+	notebook.AppendPage(gridRDP, tabRDPLabel)
+
+	// --- Tab: VNC Settings ---
+	gridVNC, _ := gtk.GridNew()
+	gridVNC.SetRowSpacing(8)
+	gridVNC.SetColumnSpacing(8)
+	gridVNC.SetMarginStart(12)
+	gridVNC.SetMarginEnd(12)
+	gridVNC.SetMarginTop(12)
+	gridVNC.SetMarginBottom(12)
+
+	// Open Mode (Tab vs Window)
+	lblVNCMode, _ := gtk.LabelNew(i18n.T("Режим открытия:", "Open Mode:"))
+	lblVNCMode.SetHAlign(gtk.ALIGN_END)
+	comboVNCMode, _ := gtk.ComboBoxTextNew()
+	comboVNCMode.Append("tab", i18n.T("Вкладка PAC (интеграция в окно)", "PAC Tab (embedded)"))
+	comboVNCMode.Append("window", i18n.T("Отдельное окно (для нескольких экранов)", "Separate Window (multi-monitor)"))
+	if host.VNCEmbedded || host.Protocol != storage.ProtoVNC {
+		comboVNCMode.SetActiveID("tab")
+	} else {
+		comboVNCMode.SetActiveID("window")
+	}
+	gridVNC.Attach(lblVNCMode, 0, 0, 1, 1)
+	gridVNC.Attach(comboVNCMode, 1, 0, 2, 1)
+
+	// Scaling options
+	chkVNCScale, _ := gtk.CheckButtonNewWithLabel(i18n.T("Масштабировать удаленный рабочий стол по размеру окна", "Scale remote desktop to window size"))
+	chkVNCScale.SetActive(host.VNCScale || host.Protocol != storage.ProtoVNC)
+	gridVNC.Attach(chkVNCScale, 1, 1, 2, 1)
+
+	// View-only option
+	chkVNCViewOnly, _ := gtk.CheckButtonNewWithLabel(i18n.T("Только просмотр (View-only, без передачи клавиатуры и мыши)", "View-only mode (ignore mouse and keyboard)"))
+	chkVNCViewOnly.SetActive(host.VNCViewOnly)
+	gridVNC.Attach(chkVNCViewOnly, 1, 2, 2, 1)
+
+	// Shared desktop option
+	chkVNCShared, _ := gtk.CheckButtonNewWithLabel(i18n.T("Разрешить совместный доступ (Shared Desktop)", "Shared Desktop (do not disconnect other clients)"))
+	chkVNCShared.SetActive(host.VNCShared)
+	gridVNC.Attach(chkVNCShared, 1, 3, 2, 1)
+
+	// Encoding options
+	lblVNCEncoding, _ := gtk.LabelNew(i18n.T("Кодировка передачи:", "Encoding:"))
+	lblVNCEncoding.SetHAlign(gtk.ALIGN_END)
+	comboVNCEncoding, _ := gtk.ComboBoxTextNew()
+	comboVNCEncoding.Append("auto", i18n.T("Автоматический выбор (Рекомендуется)", "Auto Select (Recommended)"))
+	comboVNCEncoding.Append("tight", "Tight (сжатие для медленных сетей)")
+	comboVNCEncoding.Append("zrle", "ZRLE (Zlib Run-Length)")
+	comboVNCEncoding.Append("hextile", "Hextile")
+	comboVNCEncoding.Append("raw", "Raw (без сжатия)")
+	curEnc := host.VNCEncoding
+	if curEnc == "" {
+		curEnc = "auto"
+	}
+	comboVNCEncoding.SetActiveID(curEnc)
+	gridVNC.Attach(lblVNCEncoding, 0, 4, 1, 1)
+	gridVNC.Attach(comboVNCEncoding, 1, 4, 2, 1)
+
+	// Compression Level
+	lblVNCCompress, _ := gtk.LabelNew(i18n.T("Уровень сжатия (0-9):", "Compression Level (0-9):"))
+	lblVNCCompress.SetHAlign(gtk.ALIGN_END)
+	curComp := host.VNCCompression
+	if curComp == 0 {
+		curComp = 2
+	}
+	spinVNCCompress, _ := gtk.SpinButtonNewWithRange(0, 9, 1)
+	spinVNCCompress.SetValue(float64(curComp))
+	gridVNC.Attach(lblVNCCompress, 0, 5, 1, 1)
+	gridVNC.Attach(spinVNCCompress, 1, 5, 1, 1)
+
+	// JPEG Quality Level
+	lblVNCQuality, _ := gtk.LabelNew(i18n.T("Качество JPEG (0-9):", "JPEG Quality Level (0-9):"))
+	lblVNCQuality.SetHAlign(gtk.ALIGN_END)
+	curQual := host.VNCQuality
+	if curQual == 0 {
+		curQual = 8
+	}
+	spinVNCQuality, _ := gtk.SpinButtonNewWithRange(0, 9, 1)
+	spinVNCQuality.SetValue(float64(curQual))
+	gridVNC.Attach(lblVNCQuality, 0, 6, 1, 1)
+	gridVNC.Attach(spinVNCQuality, 1, 6, 1, 1)
+
+	// Clipboard info
+	lblVNCClip, _ := gtk.LabelNew(i18n.T("📋 Двунаправленный буфер обмена (ClientCutText): Включен автоматически", "📋 Bi-directional clipboard (ClientCutText): Enabled automatically"))
+	gridVNC.Attach(lblVNCClip, 1, 7, 2, 1)
+
+	tabVNCLabel := createTabLabel(i18n.T("Параметры VNC", "VNC Settings"))
+	notebook.AppendPage(gridVNC, tabVNCLabel)
+
 	// --- Tab 4: Terminal & Appearance ---
 	gridTerm, _ := gtk.GridNew()
 	gridTerm.SetRowSpacing(8)
@@ -671,7 +919,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		proto := comboProto.GetActiveID()
 
 		// Network rows (Host / Port)
-		isNet := proto == "ssh" || proto == "telnet"
+		isNet := proto == "ssh" || proto == "telnet" || proto == "rdp"
 		lblHost.SetVisible(isNet)
 		entryHost.SetVisible(isNet)
 		lblPort.SetVisible(isNet)
@@ -682,8 +930,22 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 				entryPort.SetText("23")
 			} else if proto == "ssh" {
 				entryPort.SetText("22")
+			} else if proto == "rdp" {
+				entryPort.SetText("3389")
 			}
 		}
+
+		// RDP tab and Domain visibility
+		isRDP := proto == "rdp"
+		isVNC := proto == "vnc"
+		gridRDP.SetVisible(isRDP)
+		tabRDPLabel.SetVisible(isRDP)
+		gridVNC.SetVisible(isVNC)
+		tabVNCLabel.SetVisible(isVNC)
+		gridTerm.SetVisible(!isRDP && !isVNC)
+		tabTermLabel.SetVisible(!isRDP && !isVNC)
+		lblRDPDomain.SetVisible(isRDP)
+		entryRDPDomain.SetVisible(isRDP)
 
 		// Serial rows
 		isSerial := proto == "serial"
@@ -697,6 +959,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		comboStopBits.SetVisible(isSerial)
 		lblParity.SetVisible(isSerial)
 		comboParity.SetVisible(isSerial)
+		chkAutoBaud.SetVisible(isSerial)
 
 		// Local Shell rows
 		isLocal := proto == "local"
@@ -706,8 +969,8 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		entryWorkDir.SetVisible(isLocal)
 		btnBrowseWorkDir.SetVisible(isLocal)
 
-		// Tunnels and Jump tab visibility (SSH & Telnet)
-		hasJump := proto == "ssh" || proto == "telnet"
+		// Tunnels and Jump tab visibility (SSH, Telnet, RDP & VNC)
+		hasJump := proto == "ssh" || proto == "telnet" || proto == "rdp" || proto == "vnc"
 		gridJump.SetVisible(hasJump)
 		isSSH := proto == "ssh"
 		lblSelectJump.SetVisible(hasJump)
@@ -721,7 +984,20 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		fwdContainer.SetVisible(isSSH)
 
 		// Dynamic authentication fields on "Основное"
-		if proto != "ssh" && proto != "telnet" {
+		if proto == "rdp" || proto == "vnc" {
+			lblUser.SetVisible(true)
+			entryUser.SetVisible(true)
+			lblAuthM.SetVisible(false)
+			comboAuthM.SetVisible(false)
+			lblPass.SetVisible(true)
+			entryPass.SetVisible(true)
+			btnTogglePass.SetVisible(true)
+			lblKey.SetVisible(false)
+			entryKey.SetVisible(false)
+			btnBrowseKey.SetVisible(false)
+			lblKeyPass.SetVisible(false)
+			entryKeyPass.SetVisible(false)
+		} else if proto != "ssh" && proto != "telnet" {
 			lblUser.SetVisible(false)
 			entryUser.SetVisible(false)
 			lblAuthM.SetVisible(false)
@@ -769,6 +1045,15 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 	}
 
 	comboProto.Connect("changed", func() {
+		proto := comboProto.GetActiveID()
+		curP, _ := entryPort.GetText()
+		if proto == "vnc" && (curP == "" || curP == "22" || curP == "3389") {
+			entryPort.SetText("5900")
+		} else if proto == "rdp" && (curP == "" || curP == "22" || curP == "5900") {
+			entryPort.SetText("3389")
+		} else if proto == "ssh" && (curP == "5900" || curP == "3389" || curP == "") {
+			entryPort.SetText("22")
+		}
 		updateProtocolVisibility()
 	})
 
@@ -798,7 +1083,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		proto := comboProto.GetActiveID()
 		host.Protocol = storage.Protocol(proto)
 
-		if proto == "ssh" || proto == "telnet" {
+		if proto == "ssh" || proto == "telnet" || proto == "rdp" || proto == "vnc" {
 			host.Host, _ = entryHost.GetText()
 			portStr, _ := entryPort.GetText()
 			host.Port, _ = strconv.Atoi(portStr)
@@ -808,6 +1093,37 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		} else if proto == "serial" {
 			host.Host = ""
 			host.Port = 0
+		}
+
+		if proto == "rdp" {
+			host.RDPDomain, _ = entryRDPDomain.GetText()
+			host.RDPResolution = comboRDPRes.GetActiveID()
+			depthStr := comboRDPDepth.GetActiveID()
+			host.RDPColorDepth, _ = strconv.Atoi(depthStr)
+			host.RDPClipboard = chkRDPClipboard.GetActive()
+			if chkRDPSound.GetActive() {
+				host.RDPSound = "pulse"
+			} else {
+				host.RDPSound = "off"
+			}
+			host.RDPMicrophone = chkRDPMicrophone.GetActive()
+			host.RDPSharedFolder, _ = entryRDPShared.GetText()
+			host.RDPIgnoreCert = chkRDPIgnoreCert.GetActive()
+			host.RDPFontSmoothing = chkRDPFonts.GetActive()
+			host.RDPEmbedded = comboRDPMode.GetActiveID() != "window"
+			host.RDGatewayServer, _ = entryGWServer.GetText()
+			host.RDGatewayUsername, _ = entryGWUser.GetText()
+			host.RDGatewayPassword, _ = entryGWPass.GetText()
+			host.RDGatewayDomain, _ = entryGWDomain.GetText()
+		} else if proto == "vnc" {
+			host.VNCPassword, _ = entryPass.GetText()
+			host.VNCEmbedded = comboVNCMode.GetActiveID() != "window"
+			host.VNCScale = chkVNCScale.GetActive()
+			host.VNCViewOnly = chkVNCViewOnly.GetActive()
+			host.VNCShared = chkVNCShared.GetActive()
+			host.VNCEncoding = comboVNCEncoding.GetActiveID()
+			host.VNCCompression = int(spinVNCCompress.GetValue())
+			host.VNCQuality = int(spinVNCQuality.GetValue())
 		}
 
 		host.Username, _ = entryUser.GetText()
@@ -827,6 +1143,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		sStr := comboStopBits.GetActiveID()
 		host.SerialStopBits, _ = strconv.Atoi(sStr)
 		host.SerialParity = comboParity.GetActiveID()
+		host.SerialAutoBaud = chkAutoBaud.GetActive()
 
 		// ProxyJump
 		selectedJump := comboJumpHosts.GetActiveID()

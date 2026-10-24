@@ -104,6 +104,8 @@ type TabItem struct {
 	Panes          []*TerminalPane
 	FocusedPane    *TerminalPane
 	TargetTabIndex int
+	DetachedWindow *gtk.Window
+	DetachedWinBox *gtk.Box
 }
 
 // TabView manages notebook tabs and terminal splits
@@ -546,6 +548,11 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	closeBtn.SetTooltipText(i18n.T("Закрыть вкладку", "Close tab"))
 	tabBox.PackEnd(closeBtn, false, false, 0)
 
+	detachBtn, _ := gtk.ButtonNewFromIconName("window-restore-symbolic", gtk.ICON_SIZE_MENU)
+	detachBtn.SetRelief(gtk.RELIEF_NONE)
+	detachBtn.SetTooltipText(i18n.T("Открепить вкладку в отдельное окно", "Detach tab to a new window"))
+	tabBox.PackEnd(detachBtn, false, false, 0)
+
 	eventBox.Add(tabBox)
 	eventBox.ShowAll()
 
@@ -585,6 +592,10 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		tv.CloseTab(item)
 	})
 
+	detachBtn.Connect("clicked", func() {
+		tv.DetachTab(item)
+	})
+
 	eventBox.Connect("scroll-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
 		return tv.handleTabScroll(event, false)
 	})
@@ -606,6 +617,226 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 
 	tv.Notebook.SetCurrentPage(pageNum)
 	term.GrabFocus()
+	return item, nil
+}
+
+// AddRDPTab creates a tab embedding a gtk.Socket for RDP
+func (tv *TabView) AddRDPTab(sess *session.Session, socket *gtk.Socket) (*TabItem, error) {
+	contentBox, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	contentBox.SetHExpand(true)
+	contentBox.SetVExpand(true)
+
+	// EventBox wrapper for tab header
+	eventBox, _ := gtk.EventBoxNew()
+	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK | gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
+
+	tabBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
+	tabBox.SetMarginStart(2)
+	tabBox.SetMarginEnd(2)
+
+	titleLabel, _ := gtk.LabelNew(sess.Title)
+	tabBox.PackStart(titleLabel, true, true, 0)
+
+	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_MENU)
+	closeBtn.SetRelief(gtk.RELIEF_NONE)
+	closeBtn.SetTooltipText(i18n.T("Закрыть вкладку", "Close tab"))
+	tabBox.PackEnd(closeBtn, false, false, 0)
+
+	detachBtn, _ := gtk.ButtonNewFromIconName("window-restore-symbolic", gtk.ICON_SIZE_MENU)
+	detachBtn.SetRelief(gtk.RELIEF_NONE)
+	detachBtn.SetTooltipText(i18n.T("Открепить вкладку в отдельное окно", "Detach tab to a new window"))
+	tabBox.PackEnd(detachBtn, false, false, 0)
+
+	eventBox.Add(tabBox)
+	eventBox.ShowAll()
+
+	item := &TabItem{
+		ID:         sess.ID,
+		Session:    sess,
+		Label:      titleLabel,
+		TabBox:     tabBox,
+		EventBox:   eventBox,
+		ContentBox: contentBox,
+		Panes:      make([]*TerminalPane, 0),
+	}
+
+	paneBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	paneBox.SetHExpand(true)
+	paneBox.SetVExpand(true)
+	if socket != nil {
+		paneBox.PackStart(socket, true, true, 0)
+	}
+
+	pane := &TerminalPane{
+		Session: sess,
+		Box:     paneBox,
+		TabItem: item,
+	}
+	item.Panes = append(item.Panes, pane)
+	item.FocusedPane = pane
+	tv.UpdateTabTitle(item)
+
+	contentBox.PackStart(pane.Box, true, true, 0)
+	contentBox.ShowAll()
+
+	plusIdx := -1
+	if tv.plusContent != nil && tv.hasPlusTab {
+		plusIdx = tv.Notebook.PageNum(tv.plusContent)
+	}
+	var pageNum int
+	if plusIdx >= 0 {
+		pageNum = tv.Notebook.InsertPage(contentBox, eventBox, plusIdx)
+	} else {
+		pageNum = tv.Notebook.AppendPage(contentBox, eventBox)
+	}
+	tv.Notebook.SetTabReorderable(contentBox, true)
+	item.TargetTabIndex = len(tv.items)
+	tv.items = append(tv.items, item)
+
+	closeBtn.Connect("clicked", func() {
+		tv.CloseTab(item)
+	})
+
+	detachBtn.Connect("clicked", func() {
+		tv.DetachTab(item)
+	})
+
+	eventBox.Connect("scroll-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		return tv.handleTabScroll(event, false)
+	})
+
+	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		btnEvent := gdk.EventButtonNewFromEvent(event)
+		if btnEvent.Type() == gdk.EVENT_2BUTTON_PRESS && btnEvent.Button() == gdk.BUTTON_PRIMARY {
+			tv.showRenameDialog(item)
+			return true
+		} else if btnEvent.Button() == gdk.BUTTON_SECONDARY {
+			tv.showTabContextMenu(item, btnEvent.Time())
+			return true
+		} else if btnEvent.Button() == gdk.BUTTON_MIDDLE {
+			tv.CloseTab(item)
+			return true
+		}
+		if page := tv.Notebook.PageNum(contentBox); page >= 0 {
+			tv.Notebook.SetCurrentPage(page)
+		}
+		return false
+	})
+
+	tv.Notebook.SetCurrentPage(pageNum)
+	return item, nil
+}
+
+// AddVNCTab creates a tab embedding a gtk.Socket for VNC
+func (tv *TabView) AddVNCTab(sess *session.Session, socket *gtk.Socket) (*TabItem, error) {
+	contentBox, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	contentBox.SetHExpand(true)
+	contentBox.SetVExpand(true)
+
+	// EventBox wrapper for tab header
+	eventBox, _ := gtk.EventBoxNew()
+	eventBox.SetEvents(int(gdk.BUTTON_PRESS_MASK | gdk.BUTTON_RELEASE_MASK | gdk.SCROLL_MASK | gdk.SMOOTH_SCROLL_MASK))
+
+	tabBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
+	tabBox.SetMarginStart(2)
+	tabBox.SetMarginEnd(2)
+
+	titleLabel, _ := gtk.LabelNew(sess.Title)
+	tabBox.PackStart(titleLabel, true, true, 0)
+
+	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_MENU)
+	closeBtn.SetRelief(gtk.RELIEF_NONE)
+	closeBtn.SetTooltipText(i18n.T("Закрыть вкладку", "Close tab"))
+	tabBox.PackEnd(closeBtn, false, false, 0)
+
+	detachBtn, _ := gtk.ButtonNewFromIconName("window-restore-symbolic", gtk.ICON_SIZE_MENU)
+	detachBtn.SetRelief(gtk.RELIEF_NONE)
+	detachBtn.SetTooltipText(i18n.T("Открепить вкладку в отдельное окно", "Detach tab to a new window"))
+	tabBox.PackEnd(detachBtn, false, false, 0)
+
+	eventBox.Add(tabBox)
+	eventBox.ShowAll()
+
+	item := &TabItem{
+		ID:         sess.ID,
+		Session:    sess,
+		Label:      titleLabel,
+		TabBox:     tabBox,
+		EventBox:   eventBox,
+		ContentBox: contentBox,
+		Panes:      make([]*TerminalPane, 0),
+	}
+
+	paneBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	paneBox.SetHExpand(true)
+	paneBox.SetVExpand(true)
+	if socket != nil {
+		paneBox.PackStart(socket, true, true, 0)
+	}
+
+	pane := &TerminalPane{
+		Session: sess,
+		Box:     paneBox,
+		TabItem: item,
+	}
+	item.Panes = append(item.Panes, pane)
+	item.FocusedPane = pane
+	tv.UpdateTabTitle(item)
+
+	contentBox.PackStart(pane.Box, true, true, 0)
+	contentBox.ShowAll()
+
+	plusIdx := -1
+	if tv.plusContent != nil && tv.hasPlusTab {
+		plusIdx = tv.Notebook.PageNum(tv.plusContent)
+	}
+	var pageNum int
+	if plusIdx >= 0 {
+		pageNum = tv.Notebook.InsertPage(contentBox, eventBox, plusIdx)
+	} else {
+		pageNum = tv.Notebook.AppendPage(contentBox, eventBox)
+	}
+	tv.Notebook.SetTabReorderable(contentBox, true)
+	item.TargetTabIndex = len(tv.items)
+	tv.items = append(tv.items, item)
+
+	closeBtn.Connect("clicked", func() {
+		tv.CloseTab(item)
+	})
+
+	detachBtn.Connect("clicked", func() {
+		tv.DetachTab(item)
+	})
+
+	eventBox.Connect("scroll-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		return tv.handleTabScroll(event, false)
+	})
+
+	eventBox.Connect("button-press-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
+		btnEvent := gdk.EventButtonNewFromEvent(event)
+		if btnEvent.Type() == gdk.EVENT_2BUTTON_PRESS && btnEvent.Button() == gdk.BUTTON_PRIMARY {
+			tv.showRenameDialog(item)
+			return true
+		} else if btnEvent.Button() == gdk.BUTTON_SECONDARY {
+			tv.showTabContextMenu(item, btnEvent.Time())
+			return true
+		} else if btnEvent.Button() == gdk.BUTTON_MIDDLE {
+			tv.CloseTab(item)
+			return true
+		}
+		if page := tv.Notebook.PageNum(contentBox); page >= 0 {
+			tv.Notebook.SetCurrentPage(page)
+		}
+		return false
+	})
+
+	tv.Notebook.SetCurrentPage(pageNum)
 	return item, nil
 }
 
@@ -890,6 +1121,11 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 	closeBtn.SetTooltipText(i18n.T("Закрыть вкладку", "Close tab"))
 	tabBox.PackEnd(closeBtn, false, false, 0)
 
+	detachBtn, _ := gtk.ButtonNewFromIconName("window-restore-symbolic", gtk.ICON_SIZE_MENU)
+	detachBtn.SetRelief(gtk.RELIEF_NONE)
+	detachBtn.SetTooltipText(i18n.T("Открепить вкладку в отдельное окно", "Detach tab to a new window"))
+	tabBox.PackEnd(detachBtn, false, false, 0)
+
 	eventBox.Add(tabBox)
 	eventBox.ShowAll()
 
@@ -931,6 +1167,10 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 
 	closeBtn.Connect("clicked", func() {
 		tv.CloseTab(item)
+	})
+
+	detachBtn.Connect("clicked", func() {
+		tv.DetachTab(item)
 	})
 
 	eventBox.Connect("scroll-event", func(_ *gtk.EventBox, event *gdk.Event) bool {
@@ -1064,10 +1304,123 @@ func (tv *TabView) UnsplitTab(item *TabItem) {
 	log.Printf("[TAB] Pane %q detached into new tab successfully. Original tab %q now has %d pane(s).", pane.Session.Title, item.Session.Title, len(item.Panes))
 }
 
+// DetachTab detaches an entire tab into its own independent window
+func (tv *TabView) DetachTab(item *TabItem) {
+	if item == nil {
+		return
+	}
+	if item.DetachedWindow != nil {
+		item.DetachedWindow.Present()
+		return
+	}
+
+	pageNum := tv.Notebook.PageNum(item.ContentBox)
+	if pageNum < 0 {
+		return
+	}
+
+	item.ContentBox.Ref()
+	tv.Notebook.RemovePage(pageNum)
+
+	win, err := gtk.WindowNew(gtk.WINDOW_TOPLEVEL)
+	if err != nil {
+		item.ContentBox.Unref()
+		return
+	}
+	win.SetTitle(tv.GetTabTitle(item) + " — PAC NextGen")
+	win.SetDefaultSize(1000, 650)
+	win.SetPosition(gtk.WIN_POS_CENTER)
+
+	// Top control bar
+	topBar, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 6)
+	topBar.SetMarginStart(6)
+	topBar.SetMarginEnd(6)
+	topBar.SetMarginTop(4)
+	topBar.SetMarginBottom(4)
+
+	btnRedock, _ := gtk.ButtonNewWithLabel(i18n.T("📌 Прикрепить обратно", "📌 Re-dock to main window"))
+	btnRedock.SetTooltipText(i18n.T("Вернуть вкладку в главное окно PAC", "Return tab to main PAC window"))
+	btnRedock.Connect("clicked", func() {
+		tv.RedockTab(item)
+	})
+	topBar.PackStart(btnRedock, false, false, 0)
+
+	titleLbl, _ := gtk.LabelNew("")
+	titleLbl.SetMarkup(fmt.Sprintf("<b>%s</b>", tv.GetTabTitle(item)))
+	titleLbl.SetHExpand(true)
+	titleLbl.SetXAlign(0.5)
+	topBar.PackStart(titleLbl, true, true, 0)
+
+	winBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	winBox.PackStart(topBar, false, false, 0)
+	winBox.PackStart(item.ContentBox, true, true, 0)
+	item.ContentBox.Unref()
+
+	win.Add(winBox)
+	item.DetachedWindow = win
+	item.DetachedWinBox = winBox
+
+	win.Connect("delete-event", func() bool {
+		tv.CloseTab(item)
+		return false
+	})
+
+	win.ShowAll()
+	win.Present()
+
+	if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
+		item.FocusedPane.Terminal.GrabFocus()
+	}
+}
+
+// RedockTab returns a detached window back into the main notebook
+func (tv *TabView) RedockTab(item *TabItem) {
+	if item == nil || item.DetachedWindow == nil || item.DetachedWinBox == nil {
+		return
+	}
+
+	win := item.DetachedWindow
+	winBox := item.DetachedWinBox
+	item.DetachedWindow = nil
+	item.DetachedWinBox = nil
+
+	item.ContentBox.Ref()
+	winBox.Remove(item.ContentBox)
+
+	plusIdx := -1
+	if tv.plusContent != nil && tv.hasPlusTab {
+		plusIdx = tv.Notebook.PageNum(tv.plusContent)
+	}
+	var pageNum int
+	if plusIdx >= 0 {
+		pageNum = tv.Notebook.InsertPage(item.ContentBox, item.EventBox, plusIdx)
+	} else {
+		pageNum = tv.Notebook.AppendPage(item.ContentBox, item.EventBox)
+	}
+	item.ContentBox.Unref()
+
+	tv.Notebook.SetTabReorderable(item.ContentBox, true)
+	if pageNum >= 0 {
+		tv.Notebook.SetCurrentPage(pageNum)
+	}
+
+	win.Destroy()
+
+	if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
+		item.FocusedPane.Terminal.GrabFocus()
+	}
+}
+
 // CloseTab closes entire tab and all underlying split sessions
 func (tv *TabView) CloseTab(item *TabItem) {
 	if item == nil {
 		return
+	}
+
+	if item.DetachedWindow != nil {
+		item.DetachedWindow.Destroy()
+		item.DetachedWindow = nil
+		item.DetachedWinBox = nil
 	}
 
 	tv.isClosingTab = true
@@ -1171,6 +1524,21 @@ func (tv *TabView) GetCurrentTab() *TabItem {
 	return nil
 }
 
+// FindPaneBySession finds the TerminalPane containing the given session
+func (tv *TabView) FindPaneBySession(sess *session.Session) *TerminalPane {
+	if sess == nil {
+		return nil
+	}
+	for _, item := range tv.items {
+		for _, p := range item.Panes {
+			if p.Session == sess || (p.Session != nil && p.Session.ID == sess.ID) {
+				return p
+			}
+		}
+	}
+	return nil
+}
+
 // FindTabBySession finds TabItem by Session ID or session instance
 func (tv *TabView) FindTabBySession(sess *session.Session) *TabItem {
 	if sess == nil {
@@ -1256,7 +1624,10 @@ func (tv *TabView) showTabContextMenu(item *TabItem, eventTime uint32) {
 
 	// 2. Detach TAB to a new Window
 	mDetach, _ := gtk.MenuItemNewWithLabel(i18n.T("Открепить вкладку в новое окно", "Detach TAB to a new Window"))
-	mDetach.SetSensitive(false)
+	mDetach.SetSensitive(item != nil && item.DetachedWindow == nil)
+	mDetach.Connect("activate", func() {
+		tv.DetachTab(item)
+	})
 	menu.Append(mDetach)
 
 	// 3. Split ▸

@@ -101,6 +101,31 @@ func (s *Store) initSchema() error {
 			serial_data_bits INTEGER DEFAULT 8,
 			serial_stop_bits INTEGER DEFAULT 1,
 			serial_parity TEXT DEFAULT "N",
+			serial_auto_baud BOOLEAN DEFAULT 0,
+			rdp_domain TEXT DEFAULT '',
+			rdp_resolution TEXT DEFAULT 'dynamic',
+			rdp_color_depth INTEGER DEFAULT 32,
+			rdp_clipboard BOOLEAN DEFAULT 1,
+			rdp_sound TEXT DEFAULT 'pulse',
+			rdp_microphone BOOLEAN DEFAULT 0,
+			rdp_shared_folder TEXT DEFAULT '',
+			rdp_ignore_cert BOOLEAN DEFAULT 1,
+			rdp_performance TEXT DEFAULT 'lan',
+			rdp_font_smoothing BOOLEAN DEFAULT 1,
+			rdp_embedded BOOLEAN DEFAULT 1,
+			rd_gateway_server TEXT DEFAULT '',
+			rd_gateway_username TEXT DEFAULT '',
+			rd_gateway_password TEXT DEFAULT '',
+			rd_gateway_domain TEXT DEFAULT '',
+			vnc_port INTEGER DEFAULT 5900,
+			vnc_password TEXT DEFAULT '',
+			vnc_embedded BOOLEAN DEFAULT 1,
+			vnc_view_only BOOLEAN DEFAULT 0,
+			vnc_shared BOOLEAN DEFAULT 0,
+			vnc_scale BOOLEAN DEFAULT 1,
+			vnc_quality INTEGER DEFAULT 8,
+			vnc_compression INTEGER DEFAULT 2,
+			vnc_encoding TEXT DEFAULT 'auto',
 			terminal_type TEXT DEFAULT "xterm-256color",
 			font_name TEXT,
 			color_scheme TEXT,
@@ -159,6 +184,31 @@ func (s *Store) initSchema() error {
 	s.migrateColumn("hosts", "port_forwards", "TEXT")
 	s.migrateColumn("hosts", "ssh_keepalive_interval", "INTEGER DEFAULT 15")
 	s.migrateColumn("hosts", "ssh_keepalive_count_max", "INTEGER DEFAULT 3")
+	s.migrateColumn("hosts", "serial_auto_baud", "BOOLEAN DEFAULT 0")
+	s.migrateColumn("hosts", "rdp_domain", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "rdp_resolution", "TEXT DEFAULT 'dynamic'")
+	s.migrateColumn("hosts", "rdp_color_depth", "INTEGER DEFAULT 32")
+	s.migrateColumn("hosts", "rdp_clipboard", "BOOLEAN DEFAULT 1")
+	s.migrateColumn("hosts", "rdp_sound", "TEXT DEFAULT 'pulse'")
+	s.migrateColumn("hosts", "rdp_microphone", "BOOLEAN DEFAULT 0")
+	s.migrateColumn("hosts", "rdp_shared_folder", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "rdp_ignore_cert", "BOOLEAN DEFAULT 1")
+	s.migrateColumn("hosts", "rdp_performance", "TEXT DEFAULT 'lan'")
+	s.migrateColumn("hosts", "rdp_font_smoothing", "BOOLEAN DEFAULT 1")
+	s.migrateColumn("hosts", "rdp_embedded", "BOOLEAN DEFAULT 1")
+	s.migrateColumn("hosts", "rd_gateway_server", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "rd_gateway_username", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "rd_gateway_password", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "rd_gateway_domain", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "vnc_port", "INTEGER DEFAULT 5900")
+	s.migrateColumn("hosts", "vnc_password", "TEXT DEFAULT ''")
+	s.migrateColumn("hosts", "vnc_embedded", "BOOLEAN DEFAULT 1")
+	s.migrateColumn("hosts", "vnc_view_only", "BOOLEAN DEFAULT 0")
+	s.migrateColumn("hosts", "vnc_shared", "BOOLEAN DEFAULT 0")
+	s.migrateColumn("hosts", "vnc_scale", "BOOLEAN DEFAULT 1")
+	s.migrateColumn("hosts", "vnc_quality", "INTEGER DEFAULT 8")
+	s.migrateColumn("hosts", "vnc_compression", "INTEGER DEFAULT 2")
+	s.migrateColumn("hosts", "vnc_encoding", "TEXT DEFAULT 'auto'")
 
 	// Fix legacy imported records where key_path was set but auth_method defaulted to password
 	_, _ = s.db.Exec("UPDATE hosts SET auth_method = 'key' WHERE (key_path IS NOT NULL AND key_path != '') AND (auth_method = 'password' OR auth_method = '' OR auth_method IS NULL)")
@@ -250,7 +300,13 @@ func (s *Store) DeleteGroup(id string) error {
 const hostSelectCols = `id, COALESCE(group_id, 'root'), name, COALESCE(description, ''), protocol, COALESCE(host, ''), COALESCE(port, 22), COALESCE(username, ''), COALESCE(auth_method, 'password'),
 	COALESCE(password, ''), COALESCE(key_path, ''), COALESCE(key_pass, ''), COALESCE(x11_forwarding, 0), COALESCE(proxy_jump_host, ''), COALESCE(port_forwards, '[]'), COALESCE(auto_sftp, 1),
 	COALESCE(ssh_keepalive_interval, 15), COALESCE(ssh_keepalive_count_max, 3),
-	COALESCE(serial_port, ''), COALESCE(serial_baud_rate, 115200), COALESCE(serial_data_bits, 8), COALESCE(serial_stop_bits, 1), COALESCE(serial_parity, 'N'),
+	COALESCE(serial_port, ''), COALESCE(serial_baud_rate, 115200), COALESCE(serial_data_bits, 8), COALESCE(serial_stop_bits, 1), COALESCE(serial_parity, 'N'), COALESCE(serial_auto_baud, 0),
+	COALESCE(rdp_domain, ''), COALESCE(rdp_resolution, 'dynamic'), COALESCE(rdp_color_depth, 32), COALESCE(rdp_clipboard, 1),
+	COALESCE(rdp_sound, 'pulse'), COALESCE(rdp_microphone, 0), COALESCE(rdp_shared_folder, ''), COALESCE(rdp_ignore_cert, 1),
+	COALESCE(rdp_performance, 'lan'), COALESCE(rdp_font_smoothing, 1), COALESCE(rdp_embedded, 1),
+	COALESCE(rd_gateway_server, ''), COALESCE(rd_gateway_username, ''), COALESCE(rd_gateway_password, ''), COALESCE(rd_gateway_domain, ''),
+	COALESCE(vnc_port, 5900), COALESCE(vnc_password, ''), COALESCE(vnc_embedded, 1), COALESCE(vnc_view_only, 0),
+	COALESCE(vnc_shared, 0), COALESCE(vnc_scale, 1), COALESCE(vnc_quality, 8), COALESCE(vnc_compression, 2), COALESCE(vnc_encoding, 'auto'),
 	COALESCE(terminal_type, 'xterm-256color'), COALESCE(font_name, 'Monospace 11'), COALESCE(color_scheme, 'mate'), COALESCE(scrollback_lines, 10000), COALESCE(enable_logging, 0), COALESCE(log_path_format, ''),
 	COALESCE(log_clean_ansi, 1), COALESCE(restore_history, 1), COALESCE(notes, ''), COALESCE(sort_order, 0), created_at, updated_at`
 
@@ -272,7 +328,9 @@ func (s *Store) GetAllHosts() ([]Host, error) {
 			&h.ID, &h.GroupID, &h.Name, &h.Description, &h.Protocol, &h.Host, &h.Port, &h.Username, &h.AuthMethod,
 			&h.Password, &h.KeyPath, &h.KeyPass, &h.X11Forwarding, &h.ProxyJumpHost, &portForwardsJSON, &h.AutoSFTP,
 			&h.SSHKeepAliveInterval, &h.SSHKeepAliveCountMax,
-			&h.SerialPort, &h.SerialBaudRate, &h.SerialDataBits, &h.SerialStopBits, &h.SerialParity,
+			&h.SerialPort, &h.SerialBaudRate, &h.SerialDataBits, &h.SerialStopBits, &h.SerialParity, &h.SerialAutoBaud,
+			&h.RDPDomain, &h.RDPResolution, &h.RDPColorDepth, &h.RDPClipboard, &h.RDPSound, &h.RDPMicrophone, &h.RDPSharedFolder, &h.RDPIgnoreCert, &h.RDPPerformance, &h.RDPFontSmoothing, &h.RDPEmbedded, &h.RDGatewayServer, &h.RDGatewayUsername, &h.RDGatewayPassword, &h.RDGatewayDomain,
+			&h.VNCPort, &h.VNCPassword, &h.VNCEmbedded, &h.VNCViewOnly, &h.VNCShared, &h.VNCScale, &h.VNCQuality, &h.VNCCompression, &h.VNCEncoding,
 			&h.TerminalType, &h.FontName, &h.ColorScheme, &h.ScrollbackLines, &h.EnableLogging, &h.LogPathFormat,
 			&h.LogCleanANSI, &h.RestoreHistory, &h.Notes, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
 		)
@@ -299,7 +357,9 @@ func (s *Store) GetHost(id string) (*Host, error) {
 		&h.ID, &h.GroupID, &h.Name, &h.Description, &h.Protocol, &h.Host, &h.Port, &h.Username, &h.AuthMethod,
 		&h.Password, &h.KeyPath, &h.KeyPass, &h.X11Forwarding, &h.ProxyJumpHost, &portForwardsJSON, &h.AutoSFTP,
 		&h.SSHKeepAliveInterval, &h.SSHKeepAliveCountMax,
-		&h.SerialPort, &h.SerialBaudRate, &h.SerialDataBits, &h.SerialStopBits, &h.SerialParity,
+		&h.SerialPort, &h.SerialBaudRate, &h.SerialDataBits, &h.SerialStopBits, &h.SerialParity, &h.SerialAutoBaud,
+		&h.RDPDomain, &h.RDPResolution, &h.RDPColorDepth, &h.RDPClipboard, &h.RDPSound, &h.RDPMicrophone, &h.RDPSharedFolder, &h.RDPIgnoreCert, &h.RDPPerformance, &h.RDPFontSmoothing, &h.RDPEmbedded, &h.RDGatewayServer, &h.RDGatewayUsername, &h.RDGatewayPassword, &h.RDGatewayDomain,
+		&h.VNCPort, &h.VNCPassword, &h.VNCEmbedded, &h.VNCViewOnly, &h.VNCShared, &h.VNCScale, &h.VNCQuality, &h.VNCCompression, &h.VNCEncoding,
 		&h.TerminalType, &h.FontName, &h.ColorScheme, &h.ScrollbackLines, &h.EnableLogging, &h.LogPathFormat,
 		&h.LogCleanANSI, &h.RestoreHistory, &h.Notes, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
 	)
@@ -337,10 +397,14 @@ func (s *Store) SaveHost(h *Host) error {
 		id, group_id, name, description, protocol, host, port, username, auth_method,
 		password, key_path, key_pass, x11_forwarding, proxy_jump_host, port_forwards, auto_sftp,
 		ssh_keepalive_interval, ssh_keepalive_count_max,
-		serial_port, serial_baud_rate, serial_data_bits, serial_stop_bits, serial_parity,
+		serial_port, serial_baud_rate, serial_data_bits, serial_stop_bits, serial_parity, serial_auto_baud,
+		rdp_domain, rdp_resolution, rdp_color_depth, rdp_clipboard, rdp_sound, rdp_microphone, rdp_shared_folder,
+		rdp_ignore_cert, rdp_performance, rdp_font_smoothing, rdp_embedded,
+		rd_gateway_server, rd_gateway_username, rd_gateway_password, rd_gateway_domain,
+		vnc_port, vnc_password, vnc_embedded, vnc_view_only, vnc_shared, vnc_scale, vnc_quality, vnc_compression, vnc_encoding,
 		terminal_type, font_name, color_scheme, scrollback_lines, enable_logging, log_path_format,
 		log_clean_ansi, restore_history, notes, sort_order, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		group_id = excluded.group_id,
 		name = excluded.name,
@@ -364,6 +428,31 @@ func (s *Store) SaveHost(h *Host) error {
 		serial_data_bits = excluded.serial_data_bits,
 		serial_stop_bits = excluded.serial_stop_bits,
 		serial_parity = excluded.serial_parity,
+		serial_auto_baud = excluded.serial_auto_baud,
+		rdp_domain = excluded.rdp_domain,
+		rdp_resolution = excluded.rdp_resolution,
+		rdp_color_depth = excluded.rdp_color_depth,
+		rdp_clipboard = excluded.rdp_clipboard,
+		rdp_sound = excluded.rdp_sound,
+		rdp_microphone = excluded.rdp_microphone,
+		rdp_shared_folder = excluded.rdp_shared_folder,
+		rdp_ignore_cert = excluded.rdp_ignore_cert,
+		rdp_performance = excluded.rdp_performance,
+		rdp_font_smoothing = excluded.rdp_font_smoothing,
+		rdp_embedded = excluded.rdp_embedded,
+		rd_gateway_server = excluded.rd_gateway_server,
+		rd_gateway_username = excluded.rd_gateway_username,
+		rd_gateway_password = excluded.rd_gateway_password,
+		rd_gateway_domain = excluded.rd_gateway_domain,
+		vnc_port = excluded.vnc_port,
+		vnc_password = excluded.vnc_password,
+		vnc_embedded = excluded.vnc_embedded,
+		vnc_view_only = excluded.vnc_view_only,
+		vnc_shared = excluded.vnc_shared,
+		vnc_scale = excluded.vnc_scale,
+		vnc_quality = excluded.vnc_quality,
+		vnc_compression = excluded.vnc_compression,
+		vnc_encoding = excluded.vnc_encoding,
 		terminal_type = excluded.terminal_type,
 		font_name = excluded.font_name,
 		color_scheme = excluded.color_scheme,
@@ -380,7 +469,11 @@ func (s *Store) SaveHost(h *Host) error {
 		h.ID, h.GroupID, h.Name, h.Description, h.Protocol, h.Host, h.Port, h.Username, h.AuthMethod,
 		h.Password, h.KeyPath, h.KeyPass, h.X11Forwarding, h.ProxyJumpHost, string(portForwardsJSON), h.AutoSFTP,
 		kaInterval, kaCount,
-		h.SerialPort, h.SerialBaudRate, h.SerialDataBits, h.SerialStopBits, h.SerialParity,
+		h.SerialPort, h.SerialBaudRate, h.SerialDataBits, h.SerialStopBits, h.SerialParity, h.SerialAutoBaud,
+		h.RDPDomain, h.RDPResolution, h.RDPColorDepth, h.RDPClipboard, h.RDPSound, h.RDPMicrophone, h.RDPSharedFolder,
+		h.RDPIgnoreCert, h.RDPPerformance, h.RDPFontSmoothing, h.RDPEmbedded,
+		h.RDGatewayServer, h.RDGatewayUsername, h.RDGatewayPassword, h.RDGatewayDomain,
+		h.VNCPort, h.VNCPassword, h.VNCEmbedded, h.VNCViewOnly, h.VNCShared, h.VNCScale, h.VNCQuality, h.VNCCompression, h.VNCEncoding,
 		h.TerminalType, h.FontName, h.ColorScheme, h.ScrollbackLines, h.EnableLogging, h.LogPathFormat,
 		h.LogCleanANSI, h.RestoreHistory, h.Notes, h.SortOrder, h.CreatedAt, h.UpdatedAt,
 	)

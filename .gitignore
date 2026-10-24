@@ -1,5 +1,6 @@
 # Binaries
 /pac
+/pac-vnc
 /bin/
 /release/
 *.exe

@@ -65,6 +65,69 @@ func TestStorageCRUD(t *testing.T) {
 		t.Fatalf("unexpected loaded host data: %+v", loadedHost)
 	}
 
+	// Test Serial Host with SerialAutoBaud
+	serialHost := &Host{
+		ID:             "serial-1",
+		GroupID:        "grp-1",
+		Name:           "Serial Console",
+		Protocol:       ProtoSerial,
+		SerialPort:     "/dev/ttyUSB0",
+		SerialBaudRate: 115200,
+		SerialDataBits: 8,
+		SerialStopBits: 1,
+		SerialParity:   "none",
+		SerialAutoBaud: true,
+	}
+	if err := store.SaveHost(serialHost); err != nil {
+		t.Fatalf("failed to save serial host: %v", err)
+	}
+	loadedSerial, err := store.GetHost("serial-1")
+	if err != nil {
+		t.Fatalf("failed to get serial host: %v", err)
+	}
+	if !loadedSerial.SerialAutoBaud || loadedSerial.SerialBaudRate != 115200 || loadedSerial.SerialPort != "/dev/ttyUSB0" {
+		t.Fatalf("unexpected loaded serial host: %+v", loadedSerial)
+	}
+
+	// Test RDP Host with all fields
+	rdpHost := &Host{
+		ID:                "rdp-1",
+		GroupID:           "grp-1",
+		Name:              "Windows DC",
+		Protocol:          ProtoRDP,
+		Host:              "192.168.1.100",
+		Port:              3389,
+		Username:          "Administrator",
+		Password:          "P@ssw0rd",
+		RDPDomain:         "CORP",
+		RDPResolution:     "dynamic",
+		RDPColorDepth:     32,
+		RDPClipboard:      true,
+		RDPSound:          "pulse",
+		RDPMicrophone:     true,
+		RDPSharedFolder:   "/home/tech/Downloads",
+		RDPIgnoreCert:     true,
+		RDPPerformance:    "lan",
+		RDPFontSmoothing:  true,
+		RDPEmbedded:       true,
+		RDGatewayServer:   "gw.corp.com:443",
+		RDGatewayUsername: "gwuser",
+		RDGatewayPassword: "gwpassword",
+		RDGatewayDomain:   "CORP",
+	}
+	if err := store.SaveHost(rdpHost); err != nil {
+		t.Fatalf("failed to save RDP host: %v", err)
+	}
+	loadedRDP, err := store.GetHost("rdp-1")
+	if err != nil {
+		t.Fatalf("failed to get RDP host: %v", err)
+	}
+	if loadedRDP.Protocol != ProtoRDP || loadedRDP.RDPDomain != "CORP" || loadedRDP.RDPSound != "pulse" ||
+		!loadedRDP.RDPMicrophone || loadedRDP.RDPSharedFolder != "/home/tech/Downloads" ||
+		loadedRDP.RDGatewayServer != "gw.corp.com:443" {
+		t.Fatalf("unexpected loaded RDP host: %+v", loadedRDP)
+	}
+
 	// Test Note
 	if err := store.SaveNote("host-1", "Test note content"); err != nil {
 		t.Fatalf("failed to save note: %v", err)
