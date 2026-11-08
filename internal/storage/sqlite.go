@@ -47,6 +47,11 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to init db schema: %w", err)
 	}
 
+	// Security hardening: enforce 0600 on the database file and WAL logs so other local users cannot read saved credentials
+	_ = os.Chmod(dbPath, 0600)
+	_ = os.Chmod(dbPath+"-wal", 0600)
+	_ = os.Chmod(dbPath+"-shm", 0600)
+
 	return store, nil
 }
 

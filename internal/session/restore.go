@@ -39,7 +39,17 @@ func SaveState(store *storage.Store, sessions []*Session) error {
 		scrollback := CleanScrollbackDump(s.GetScrollbackText())
 
 		workingDir := "/"
-		if s.SFTPClient != nil {
+		if s.LocalSession != nil {
+			if d := s.LocalSession.CurrentDir(); d != "" {
+				workingDir = d
+			}
+		}
+		if workingDir == "/" && s.Tracker != nil {
+			if d := s.Tracker.GetLastPath(); d != "" {
+				workingDir = d
+			}
+		}
+		if workingDir == "/" && s.SFTPClient != nil {
 			workingDir = s.SFTPClient.CurrentDir()
 		}
 

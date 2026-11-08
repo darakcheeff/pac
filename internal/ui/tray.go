@@ -100,12 +100,12 @@ static void pac_set_indicator_icon_path(AppIndicator* ind, const char* dir, cons
     app_indicator_set_icon_full(ind, name, desc);
 }
 
-static void pac_set_indicator_secondary(AppIndicator* ind, GtkWidget* item) {
-    app_indicator_set_secondary_activate_target(ind, item);
+static void pac_set_indicator_secondary(AppIndicator* ind, uintptr_t item) {
+    app_indicator_set_secondary_activate_target(ind, GTK_WIDGET((void*)item));
 }
 
-static void pac_set_indicator_menu(AppIndicator* ind, GtkMenu* menu) {
-    app_indicator_set_menu(ind, menu);
+static void pac_set_indicator_menu(AppIndicator* ind, uintptr_t menu) {
+    app_indicator_set_menu(ind, GTK_MENU((void*)menu));
 }
 */
 import "C"
@@ -226,10 +226,10 @@ func (t *TrayIcon) buildMenu() {
 
 	// Pass GtkMenu* to AppIndicator via CGo
 	menuNative := menu.Native()
-	C.pac_set_indicator_menu(t.indicator, (*C.GtkMenu)(unsafe.Pointer(menuNative)))
+	C.pac_set_indicator_menu(t.indicator, C.uintptr_t(menuNative))
 
 	// Connect secondary activate target (middle click) to show/hide
-	C.pac_set_indicator_secondary(t.indicator, (*C.GtkWidget)(unsafe.Pointer(showHideItem.Native())))
+	C.pac_set_indicator_secondary(t.indicator, C.uintptr_t(showHideItem.Native()))
 
 	// Hold reference so GC doesn't collect
 	_ = menu

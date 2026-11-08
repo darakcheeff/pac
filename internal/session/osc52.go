@@ -11,7 +11,6 @@ import (
 // Format: \x1b]52;<target>;<base64_payload>[\x07|\x1b\\]
 type OSC52Parser struct {
 	buf      []byte
-	inSeq    bool
 	onCopy   func(target string, text string)
 	mu       sync.Mutex
 }

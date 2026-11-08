@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -128,22 +127,4 @@ func connectLocalDisplay(display string) (net.Conn, error) {
 		port += dInt
 	}
 	return net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-}
-
-type x11ChannelData struct {
-	OriginatorAddress string
-	OriginatorPort    uint32
-}
-
-func parseX11ChannelData(extraData []byte) (*x11ChannelData, error) {
-	var data x11ChannelData
-	if len(extraData) < 4 {
-		return &data, nil
-	}
-	addrLen := binary.BigEndian.Uint32(extraData[:4])
-	if int(addrLen)+8 <= len(extraData) {
-		data.OriginatorAddress = string(extraData[4 : 4+addrLen])
-		data.OriginatorPort = binary.BigEndian.Uint32(extraData[4+addrLen : 8+addrLen])
-	}
-	return &data, nil
 }

@@ -73,7 +73,7 @@ func ShowHostEditorDialog(parent *gtk.Window, store *storage.Store, host *storag
 		dlg.SetTitle(i18n.Tf("Свойства: %s", "Properties: %s", host.Name))
 	}
 	dlg.SetTransientFor(parent)
-	dlg.SetModal(true)
+	dlg.SetModal(false)
 	dlg.SetDefaultSize(640, 560)
 
 	contentArea, _ := dlg.GetContentArea()

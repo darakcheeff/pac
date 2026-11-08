@@ -779,6 +779,18 @@ func (t *Terminal) FeedChild(text string) {
 	C.vte_terminal_feed_child(t.vteTerm, cStr, C.gssize(len(text)))
 }
 
+// GetCurrentDirectoryURI returns the current working directory URI reported by VTE
+func (t *Terminal) GetCurrentDirectoryURI() string {
+	if t.vteTerm == nil {
+		return ""
+	}
+	cUri := C.vte_terminal_get_current_directory_uri(t.vteTerm)
+	if cUri == nil {
+		return ""
+	}
+	return C.GoString(cUri)
+}
+
 // SetScrollbackLines updates maximum scrollback buffer depth
 func (t *Terminal) SetScrollbackLines(lines int) {
 	C.vte_terminal_set_scrollback_lines(t.vteTerm, C.glong(lines))

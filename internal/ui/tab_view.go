@@ -67,6 +67,18 @@ func areWidgetsEqual(w1, w2 gtk.IWidget) bool {
 	return w1.ToWidget().GObject == w2.ToWidget().GObject
 }
 
+func (tv *TabView) getTabByPageWidget(page *gtk.Widget) *TabItem {
+	if page == nil {
+		return nil
+	}
+	for _, item := range tv.items {
+		if areWidgetsEqual(item.ContentBox, page) {
+			return item
+		}
+	}
+	return nil
+}
+
 // TerminalPane represents an individual terminal pane inside a tab
 type TerminalPane struct {
 	Session           *session.Session
@@ -185,6 +197,50 @@ func (tv *TabView) SetTheme(isDark bool) {
 	tv.IsDark = isDark
 	for _, item := range tv.items {
 		tv.UpdateTabTitle(item)
+		tv.UpdatePaneBorders(item)
+	}
+}
+
+// UpdatePaneBorders applies or removes visual highlight borders around split panes
+func (tv *TabView) UpdatePaneBorders(item *TabItem) {
+	if item == nil {
+		return
+	}
+
+	// If the tab has 0 or 1 pane, no split border is needed
+	if len(item.Panes) <= 1 {
+		for _, p := range item.Panes {
+			if p != nil && p.Box != nil {
+				if sc, err := p.Box.GetStyleContext(); err == nil && sc != nil {
+					sc.RemoveClass("split-active")
+					sc.RemoveClass("split-inactive")
+				}
+			}
+		}
+		return
+	}
+
+	// Tab has 2 or more panes: highlight the active one, mark others as inactive
+	activePane := item.FocusedPane
+	if activePane == nil && len(item.Panes) > 0 {
+		activePane = item.Panes[0]
+	}
+
+	for _, p := range item.Panes {
+		if p == nil || p.Box == nil {
+			continue
+		}
+		sc, err := p.Box.GetStyleContext()
+		if err != nil || sc == nil {
+			continue
+		}
+		if p == activePane {
+			sc.AddClass("split-active")
+			sc.RemoveClass("split-inactive")
+		} else {
+			sc.RemoveClass("split-active")
+			sc.AddClass("split-inactive")
+		}
 	}
 }
 
@@ -267,6 +323,7 @@ func (tv *TabView) UpdateTabTitleForSession(sess *session.Session) {
 		for _, pane := range item.Panes {
 			if pane.Session == sess {
 				tv.UpdateTabTitle(item)
+			tv.UpdatePaneBorders(item)
 				return
 			}
 		}
@@ -322,33 +379,34 @@ func NewTabView() (*TabView, error) {
 			}
 		}
 
-		item := tv.GetCurrentTab()
+		// Resolve the newly activated tab (page is the child widget being switched to)
+		item := tv.getTabByPageWidget(page)
+		if item == nil && int(pageNum) >= 0 && int(pageNum) < len(tv.items) {
+			item = tv.items[pageNum]
+		}
 		if item != nil {
-			if item.FocusedPane != nil {
-				item.FocusedPane.HasUnreadActivity = false
-			} else if len(item.Panes) > 0 {
-				item.Panes[0].HasUnreadActivity = false
+			targetPane := item.FocusedPane
+			if targetPane == nil && len(item.Panes) > 0 {
+				targetPane = item.Panes[0]
+			}
+			if targetPane != nil {
+				targetPane.HasUnreadActivity = false
 			}
 			tv.UpdateTabTitle(item)
+			tv.UpdatePaneBorders(item)
 
-			if item.FocusedPane != nil && item.FocusedPane.Terminal != nil {
-				targetTerm := item.FocusedPane.Terminal
-				glib.IdleAdd(func() {
-					targetTerm.GrabFocus()
-				})
-				tv.lastActiveSession = item.FocusedPane.Session
+			if targetPane != nil {
+				tv.lastActiveSession = targetPane.Session
 				if tv.OnTabChanged != nil {
-					tv.OnTabChanged(item.FocusedPane.Session)
+					tv.OnTabChanged(targetPane.Session)
 				}
-			} else if len(item.Panes) > 0 && item.Panes[0].Terminal != nil {
-				targetTerm := item.Panes[0].Terminal
 				glib.IdleAdd(func() {
-					targetTerm.GrabFocus()
+					if targetPane.Terminal != nil {
+						targetPane.Terminal.GrabFocus()
+					} else if targetPane.Box != nil {
+						targetPane.Box.GrabFocus()
+					}
 				})
-				tv.lastActiveSession = item.Panes[0].Session
-				if tv.OnTabChanged != nil {
-					tv.OnTabChanged(item.Panes[0].Session)
-				}
 			}
 		} else {
 			tv.lastActiveSession = nil
@@ -423,6 +481,9 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	box, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 	box.SetHExpand(true)
 	box.SetVExpand(true)
+	if sc, err := box.GetStyleContext(); err == nil && sc != nil {
+		sc.AddClass("split-pane")
+	}
 
 	searchBar, _ := NewSearchBar()
 	searchBar.SetActiveTerminal(term)
@@ -462,6 +523,7 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
+			tv.UpdatePaneBorders(pane.TabItem)
 		}
 		if pane.HasUnreadActivity {
 			pane.HasUnreadActivity = false
@@ -484,6 +546,7 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
 			pane.TabItem.FocusedPane = pane
+			tv.UpdatePaneBorders(pane.TabItem)
 		}
 		if pane.HasUnreadActivity {
 			pane.HasUnreadActivity = false
@@ -570,6 +633,7 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 	item.Panes = append(item.Panes, pane)
 	item.FocusedPane = pane
 	tv.UpdateTabTitle(item)
+	tv.UpdatePaneBorders(item)
 
 	contentBox.PackStart(pane.Box, true, true, 0)
 	contentBox.ShowAll()
@@ -611,6 +675,25 @@ func (tv *TabView) AddTab(sess *session.Session, term *vte.Terminal) (*TabItem, 
 		} else if btnEvent.Button() == gdk.BUTTON_MIDDLE {
 			tv.CloseTab(item)
 			return true
+		}
+		if page := tv.Notebook.PageNum(contentBox); page >= 0 {
+			if tv.Notebook.GetCurrentPage() == page {
+				glib.IdleAdd(func() {
+					target := item.FocusedPane
+					if target == nil && len(item.Panes) > 0 {
+						target = item.Panes[0]
+					}
+					if target != nil {
+						if target.Terminal != nil {
+							target.Terminal.GrabFocus()
+						} else if target.Box != nil {
+							target.Box.GrabFocus()
+						}
+					}
+				})
+			} else {
+				tv.Notebook.SetCurrentPage(page)
+			}
 		}
 		return false
 	})
@@ -666,6 +749,9 @@ func (tv *TabView) AddRDPTab(sess *session.Session, socket *gtk.Socket) (*TabIte
 	paneBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 	paneBox.SetHExpand(true)
 	paneBox.SetVExpand(true)
+	if sc, err := paneBox.GetStyleContext(); err == nil && sc != nil {
+		sc.AddClass("split-pane")
+	}
 	if socket != nil {
 		paneBox.PackStart(socket, true, true, 0)
 	}
@@ -678,6 +764,8 @@ func (tv *TabView) AddRDPTab(sess *session.Session, socket *gtk.Socket) (*TabIte
 	item.Panes = append(item.Panes, pane)
 	item.FocusedPane = pane
 	tv.UpdateTabTitle(item)
+	tv.UpdatePaneBorders(item)
+	tv.UpdatePaneBorders(item)
 
 	contentBox.PackStart(pane.Box, true, true, 0)
 	contentBox.ShowAll()
@@ -721,7 +809,23 @@ func (tv *TabView) AddRDPTab(sess *session.Session, socket *gtk.Socket) (*TabIte
 			return true
 		}
 		if page := tv.Notebook.PageNum(contentBox); page >= 0 {
-			tv.Notebook.SetCurrentPage(page)
+			if tv.Notebook.GetCurrentPage() == page {
+				glib.IdleAdd(func() {
+					target := item.FocusedPane
+					if target == nil && len(item.Panes) > 0 {
+						target = item.Panes[0]
+					}
+					if target != nil {
+						if target.Terminal != nil {
+							target.Terminal.GrabFocus()
+						} else if target.Box != nil {
+							target.Box.GrabFocus()
+						}
+					}
+				})
+			} else {
+				tv.Notebook.SetCurrentPage(page)
+			}
 		}
 		return false
 	})
@@ -776,6 +880,9 @@ func (tv *TabView) AddVNCTab(sess *session.Session, socket *gtk.Socket) (*TabIte
 	paneBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 	paneBox.SetHExpand(true)
 	paneBox.SetVExpand(true)
+	if sc, err := paneBox.GetStyleContext(); err == nil && sc != nil {
+		sc.AddClass("split-pane")
+	}
 	if socket != nil {
 		paneBox.PackStart(socket, true, true, 0)
 	}
@@ -788,6 +895,8 @@ func (tv *TabView) AddVNCTab(sess *session.Session, socket *gtk.Socket) (*TabIte
 	item.Panes = append(item.Panes, pane)
 	item.FocusedPane = pane
 	tv.UpdateTabTitle(item)
+	tv.UpdatePaneBorders(item)
+	tv.UpdatePaneBorders(item)
 
 	contentBox.PackStart(pane.Box, true, true, 0)
 	contentBox.ShowAll()
@@ -831,7 +940,23 @@ func (tv *TabView) AddVNCTab(sess *session.Session, socket *gtk.Socket) (*TabIte
 			return true
 		}
 		if page := tv.Notebook.PageNum(contentBox); page >= 0 {
-			tv.Notebook.SetCurrentPage(page)
+			if tv.Notebook.GetCurrentPage() == page {
+				glib.IdleAdd(func() {
+					target := item.FocusedPane
+					if target == nil && len(item.Panes) > 0 {
+						target = item.Panes[0]
+					}
+					if target != nil {
+						if target.Terminal != nil {
+							target.Terminal.GrabFocus()
+						} else if target.Box != nil {
+							target.Box.GrabFocus()
+						}
+					}
+				})
+			} else {
+				tv.Notebook.SetCurrentPage(page)
+			}
 		}
 		return false
 	})
@@ -1000,6 +1125,7 @@ func (tv *TabView) SplitPane(item *TabItem, targetPane *TerminalPane, newSess *s
 	item.Panes = append(item.Panes, newPane)
 	item.FocusedPane = newPane
 	tv.UpdateTabTitle(item)
+	tv.UpdatePaneBorders(item)
 
 	item.ContentBox.ShowAll()
 	newTerm.GrabFocus()
@@ -1071,6 +1197,7 @@ func (tv *TabView) ClosePane(pane *TerminalPane) {
 	}
 	item.Panes = newPanes
 	tv.UpdateTabTitle(item)
+	tv.UpdatePaneBorders(item)
 
 	if pane.Session != nil {
 		_ = pane.Session.Close()
@@ -1144,6 +1271,7 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 	pane.SplitDirection = ""
 	pane.ParentSessionID = ""
 	tv.UpdateTabTitle(item)
+	tv.UpdatePaneBorders(item)
 
 	// Ensure pane.Box has no lingering parent before packing
 	removeWidgetFromParent(pane.Box)
@@ -1188,6 +1316,25 @@ func (tv *TabView) AddTabWithPane(pane *TerminalPane) (*TabItem, error) {
 		} else if btnEvent.Button() == gdk.BUTTON_MIDDLE {
 			tv.CloseTab(item)
 			return true
+		}
+		if page := tv.Notebook.PageNum(contentBox); page >= 0 {
+			if tv.Notebook.GetCurrentPage() == page {
+				glib.IdleAdd(func() {
+					target := item.FocusedPane
+					if target == nil && len(item.Panes) > 0 {
+						target = item.Panes[0]
+					}
+					if target != nil {
+						if target.Terminal != nil {
+							target.Terminal.GrabFocus()
+						} else if target.Box != nil {
+							target.Box.GrabFocus()
+						}
+					}
+				})
+			} else {
+				tv.Notebook.SetCurrentPage(page)
+			}
 		}
 		return false
 	})
@@ -1282,6 +1429,7 @@ func (tv *TabView) UnsplitTab(item *TabItem) {
 			item.ID = item.Session.ID
 		}
 		tv.UpdateTabTitle(item)
+		tv.UpdatePaneBorders(item)
 	}
 
 	item.ContentBox.ShowAll()
@@ -1600,6 +1748,7 @@ func (tv *TabView) showRenameDialog(item *TabItem) {
 				item.FocusedPane.Session.Title = newTitle
 			}
 			tv.UpdateTabTitle(item)
+			tv.UpdatePaneBorders(item)
 		}
 	}
 	dlg.Destroy()
@@ -1858,6 +2007,7 @@ func (tv *TabView) UpdateSessionForTerminal(term *vte.Terminal, newSess *session
 					tv.OnTabChanged(newSess)
 				}
 				tv.UpdateTabTitle(item)
+			tv.UpdatePaneBorders(item)
 				return
 			}
 		}
@@ -2018,6 +2168,7 @@ func (tv *TabView) MergeTabInto(targetTab, sourceTab *TabItem, vertical bool) er
 
 	targetTab.ContentBox.ShowAll()
 	tv.UpdateTabTitle(targetTab)
+	tv.UpdatePaneBorders(targetTab)
 	if targetTab.FocusedPane != nil && targetTab.FocusedPane.Terminal != nil {
 		targetTab.FocusedPane.Terminal.GrabFocus()
 		if tv.OnTabChanged != nil && targetTab.FocusedPane.Session != nil {

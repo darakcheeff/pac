@@ -15,7 +15,7 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	dlg, _ := gtk.DialogNew()
 	dlg.SetTitle(i18n.T("Быстрое подключение", "Quick Connect"))
 	dlg.SetTransientFor(parent)
-	dlg.SetModal(true)
+	dlg.SetModal(false)
 	dlg.SetDefaultSize(420, 280)
 
 	contentArea, _ := dlg.GetContentArea()
@@ -32,10 +32,29 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	entryPort.SetText("22")
 	entryPort.SetActivatesDefault(true)
 
-	// Host / Device entry
+	// 1. Network Host / IP entry (SSH / Telnet)
 	entryHost, _ := gtk.EntryNew()
 	entryHost.SetPlaceholderText(i18n.T("192.168.1.1 или server.com", "192.168.1.1 or server.com"))
 	entryHost.SetActivatesDefault(true)
+
+	// 2. Serial Port Combo / Entry (with detected devices)
+	comboSerialPort, _ := gtk.ComboBoxTextNewWithEntry()
+	availPorts := scanSerialPorts()
+	for _, p := range availPorts {
+		comboSerialPort.AppendText(p)
+	}
+	if len(availPorts) > 0 {
+		comboSerialPort.SetActive(0)
+	} else {
+		comboSerialPort.AppendText("/dev/ttyUSB0")
+		comboSerialPort.SetActive(0)
+	}
+
+	// 3. Local Shell Command entry
+	entryShell, _ := gtk.EntryNew()
+	entryShell.SetPlaceholderText("/bin/bash")
+	entryShell.SetText("/bin/bash")
+	entryShell.SetActivatesDefault(true)
 
 	// User entry
 	entryUser, _ := gtk.EntryNew()
@@ -57,8 +76,8 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	comboProto.Append("local", i18n.T("Локальный терминал", "Local Terminal"))
 	comboProto.SetActiveID("ssh")
 
-	lblHost, _ := gtk.LabelNew(i18n.T("Хост / IP:", "Host / IP:"))
-	lblHost.SetHAlign(gtk.ALIGN_END)
+	lblTarget, _ := gtk.LabelNew(i18n.T("Хост / IP:", "Host / IP:"))
+	lblTarget.SetHAlign(gtk.ALIGN_END)
 
 	lblPort, _ := gtk.LabelNew(i18n.T("Порт:", "Port:"))
 	lblPort.SetHAlign(gtk.ALIGN_END)
@@ -71,49 +90,45 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 
 	updateProto := func() {
 		p := comboProto.GetActiveID()
-		if p == "telnet" {
-			lblHost.SetText(i18n.T("Хост / IP:", "Host / IP:"))
-			entryHost.SetPlaceholderText("192.168.1.1")
-			lblPort.SetVisible(true)
-			entryPort.SetVisible(true)
-			entryPort.SetText("23")
-			lblUser.SetVisible(true)
-			entryUser.SetVisible(true)
-			lblPass.SetVisible(true)
-			entryPass.SetVisible(true)
-		} else if p == "ssh" {
-			lblHost.SetText(i18n.T("Хост / IP:", "Host / IP:"))
-			entryHost.SetPlaceholderText(i18n.T("192.168.1.1 или server.com", "192.168.1.1 or server.com"))
-			lblPort.SetVisible(true)
-			entryPort.SetVisible(true)
-			entryPort.SetText("22")
-			lblUser.SetVisible(true)
-			entryUser.SetVisible(true)
-			lblPass.SetVisible(true)
-			entryPass.SetVisible(true)
-		} else if p == "serial" {
-			lblHost.SetText(i18n.T("COM-устройство:", "COM Device:"))
-			entryHost.SetPlaceholderText(i18n.T("/dev/ttyUSB0 или /tmp/ttySerial0", "/dev/ttyUSB0 or /tmp/ttySerial0"))
-			if entryHost.GetTextLength() == 0 {
-				entryHost.SetText("/dev/ttyUSB0")
-			}
-			lblPort.SetVisible(false)
-			entryPort.SetVisible(false)
-			lblUser.SetVisible(false)
-			entryUser.SetVisible(false)
-			lblPass.SetVisible(false)
-			entryPass.SetVisible(false)
-		} else if p == "local" {
-			lblHost.SetText(i18n.T("Команда / Shell:", "Command / Shell:"))
-			entryHost.SetPlaceholderText("/bin/bash")
-			entryHost.SetText("/bin/bash")
-			lblPort.SetVisible(false)
-			entryPort.SetVisible(false)
-			lblUser.SetVisible(false)
-			entryUser.SetVisible(false)
-			lblPass.SetVisible(false)
-			entryPass.SetVisible(false)
+
+		isNet := p == "ssh" || p == "telnet"
+		isSerial := p == "serial"
+		isLocal := p == "local"
+
+		// Dynamic Target Label
+		if isNet {
+			lblTarget.SetText(i18n.T("Хост / IP:", "Host / IP:"))
+		} else if isSerial {
+			lblTarget.SetText(i18n.T("COM-устройство:", "COM Device:"))
+		} else if isLocal {
+			lblTarget.SetText(i18n.T("Команда / Shell:", "Command / Shell:"))
 		}
+
+		// Independent Target Widgets Visibility (Best Practice: 1 widget per distinct entity)
+		entryHost.SetVisible(isNet)
+		comboSerialPort.SetVisible(isSerial)
+		entryShell.SetVisible(isLocal)
+
+		// Port field
+		lblPort.SetVisible(isNet)
+		entryPort.SetVisible(isNet)
+		if p == "telnet" {
+			curP, _ := entryPort.GetText()
+			if curP == "" || curP == "22" {
+				entryPort.SetText("23")
+			}
+		} else if p == "ssh" {
+			curP, _ := entryPort.GetText()
+			if curP == "" || curP == "23" {
+				entryPort.SetText("22")
+			}
+		}
+
+		// User & Password fields
+		lblUser.SetVisible(isNet)
+		entryUser.SetVisible(isNet)
+		lblPass.SetVisible(isNet)
+		entryPass.SetVisible(isNet)
 	}
 
 	comboProto.Connect("changed", func() {
@@ -123,8 +138,10 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	grid.Attach(lblProto, 0, 0, 1, 1)
 	grid.Attach(comboProto, 1, 0, 1, 1)
 
-	grid.Attach(lblHost, 0, 1, 1, 1)
+	grid.Attach(lblTarget, 0, 1, 1, 1)
 	grid.Attach(entryHost, 1, 1, 1, 1)
+	grid.Attach(comboSerialPort, 1, 1, 1, 1)
+	grid.Attach(entryShell, 1, 1, 1, 1)
 
 	grid.Attach(lblPort, 0, 2, 1, 1)
 	grid.Attach(entryPort, 1, 2, 1, 1)
@@ -146,7 +163,23 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 	updateProto()
 
 	if dlg.Run() == gtk.RESPONSE_OK {
-		hostStr, _ := entryHost.GetText()
+		proto := storage.Protocol(comboProto.GetActiveID())
+
+		hostStr := ""
+		serialPort := ""
+		if proto == storage.ProtoLocal {
+			hostStr, _ = entryShell.GetText()
+		} else if proto == storage.ProtoSerial {
+			if devEntry, err := comboSerialPort.GetEntry(); err == nil && devEntry != nil {
+				serialPort, _ = devEntry.GetText()
+			} else {
+				serialPort = comboSerialPort.GetActiveText()
+			}
+			hostStr = serialPort
+		} else {
+			hostStr, _ = entryHost.GetText()
+		}
+
 		userStr, _ := entryUser.GetText()
 		passStr, _ := entryPass.GetText()
 		portStr, _ := entryPort.GetText()
@@ -155,7 +188,6 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 			portInt = 22
 		}
 
-		proto := storage.Protocol(comboProto.GetActiveID())
 		name := fmt.Sprintf("%s@%s", userStr, hostStr)
 		if proto == storage.ProtoSerial {
 			name = fmt.Sprintf("Serial (%s)", hostStr)
@@ -177,7 +209,7 @@ func ShowQuickConnectDialog(parent *gtk.Window, onConnect func(host *storage.Hos
 			Username:       userStr,
 			AuthMethod:     storage.AuthPassword,
 			Password:       passStr,
-			SerialPort:     hostStr,
+			SerialPort:     serialPort,
 			SerialBaudRate: 115200,
 			SerialDataBits: 8,
 			SerialStopBits: 1,

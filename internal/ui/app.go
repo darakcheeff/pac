@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -38,6 +39,9 @@ import (
 
 //go:embed assets/icon.png
 var appIconBytes []byte
+
+// AppVersion represents the current application release/build version
+const AppVersion = "v1.1.1"
 
 // AppWindow represents the primary application window
 type AppWindow struct {
@@ -239,6 +243,23 @@ paned > separator:hover {
 	background-color: #3584e4;
 	border-color: #1a5fb4;
 }
+box.split-pane {
+	border: none;
+	margin: 0;
+	padding: 0;
+}
+box.split-pane.split-active {
+	border: 2px solid #3584e4;
+	border-radius: 3px;
+	margin: 1px;
+	transition: border-color 120ms ease-in-out;
+}
+box.split-pane.split-inactive {
+	border: 2px solid #383838;
+	border-radius: 3px;
+	margin: 1px;
+	transition: border-color 120ms ease-in-out;
+}
 button {
 	background-color: #333333;
 	color: #dddddd;
@@ -380,6 +401,23 @@ paned > separator:hover {
 	background-color: #3584e4;
 	border-color: #1a5fb4;
 }
+box.split-pane {
+	border: none;
+	margin: 0;
+	padding: 0;
+}
+box.split-pane.split-active {
+	border: 2px solid #1a73e8;
+	border-radius: 3px;
+	margin: 1px;
+	transition: border-color 120ms ease-in-out;
+}
+box.split-pane.split-inactive {
+	border: 2px solid #d0d0d0;
+	border-radius: 3px;
+	margin: 1px;
+	transition: border-color 120ms ease-in-out;
+}
 button {
 	background-color: #f0f0f0;
 	color: #2e3436;
@@ -410,6 +448,13 @@ tooltip label, tooltip * {
 	font-weight: normal;
 }
 `
+
+// SetStatus updates status bar message prefixed with application version
+func (app *AppWindow) SetStatus(msg string) {
+	if app.StatusLabel != nil {
+		app.StatusLabel.SetText(fmt.Sprintf("[%s] %s", AppVersion, msg))
+	}
+}
 
 // applyTheme configures GTK dark/light theme and custom styling
 func (app *AppWindow) applyTheme(theme string) {
@@ -601,7 +646,7 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	// 5. StatusBar
 	statusBar, _ := gtk.StatusbarNew()
-	statusLabel, _ := gtk.LabelNew(i18n.T("Готово к работе", "Ready"))
+	statusLabel, _ := gtk.LabelNew(fmt.Sprintf("[%s] %s", AppVersion, i18n.T("Готово к работе", "Ready")))
 	statusLabel.SetMarginStart(8)
 	statusBar.PackStart(statusLabel, false, false, 0)
 	mainBox.PackEnd(statusBar, false, false, 0)
@@ -630,6 +675,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 
 	app.setupMenuAndToolbar()
 	app.setupSignals()
+
+	// Set initial status bar message with version
+	app.SetStatus(i18n.T("Готово к работе", "Ready"))
 
 	// Apply initial theme from settings (default to dark)
 	initTheme := "dark"
@@ -740,11 +788,11 @@ func (app *AppWindow) setupMenuAndToolbar() {
 			return
 		}
 		if len(tab.Panes) <= 1 {
-			app.StatusLabel.SetText(i18n.T("Текущая вкладка не содержит разделенных панелей", "Current tab has no split panes"))
+			app.SetStatus(i18n.T("Текущая вкладка не содержит разделенных панелей", "Current tab has no split panes"))
 			return
 		}
 		app.TabView.UnsplitTab(tab)
-		app.StatusLabel.SetText(i18n.T("Активная панель вынесена в отдельную вкладку", "Active pane detached into separate tab"))
+		app.SetStatus(i18n.T("Активная панель вынесена в отдельную вкладку", "Active pane detached into separate tab"))
 	})
 	app.ToolBar.Insert(btnUnsplit, -1)
 
@@ -950,14 +998,14 @@ func (app *AppWindow) setupSignals() {
 
 		hosts, _, err := migration.ParseLegacyConfigFile(configPath)
 		if err != nil {
-			app.StatusLabel.SetText(i18n.T("Ошибка чтения конфигурации: ", "Configuration read error: ") + err.Error())
+			app.SetStatus(i18n.T("Ошибка чтения конфигурации: ", "Configuration read error: ") + err.Error())
 			app.ShowError(i18n.T("Ошибка чтения конфигурации", "Configuration Read Error"),
 				i18n.Tf("Не удалось прочитать конфигурацию из \"%s\":\n\n%s", "Failed to read configuration from \"%s\":\n\n%s", configPath, err.Error()))
 			return
 		}
 
 		if len(hosts) == 0 {
-			app.StatusLabel.SetText(i18n.T("В конфигурационном файле не найдено подключений", "No connections found in configuration file"))
+			app.SetStatus(i18n.T("В конфигурационном файле не найдено подключений", "No connections found in configuration file"))
 			app.ShowError(i18n.T("Импорт конфигурации", "Configuration Import"),
 				i18n.T("В указанном файле не найдено подключений для импорта.", "No connections found to import in specified file."))
 			return
@@ -1001,7 +1049,7 @@ func (app *AppWindow) setupSignals() {
 			}
 
 			app.HostTree.Reload()
-			app.StatusLabel.SetText(i18n.Tf("Успешно импортировано %d хостов в папку asbru", "Successfully imported %d hosts into asbru folder", importedCount))
+			app.SetStatus(i18n.Tf("Успешно импортировано %d хостов в папку asbru", "Successfully imported %d hosts into asbru folder", importedCount))
 		})
 	}
 
@@ -1018,7 +1066,7 @@ func (app *AppWindow) setupSignals() {
 				app.SFTPPanel.AttachClient("", "", nil, app.settings.DefaultEditor)
 			}
 			if sess.Host != nil {
-				app.StatusLabel.SetText(i18n.Tf("Сессия: %s (%s) | Протокол: %s", "Session: %s (%s) | Protocol: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
+				app.SetStatus(i18n.Tf("Сессия: %s (%s) | Протокол: %s", "Session: %s (%s) | Protocol: %s", sess.Title, sess.Host.Host, sess.Host.Protocol))
 			}
 		}
 	}
@@ -1115,7 +1163,7 @@ func (app *AppWindow) setupSignals() {
 				textToSave = session.CleanScrollbackDump(sess.GetScrollbackText())
 			}
 			_ = os.WriteFile(filename, []byte(textToSave), 0644)
-			app.StatusLabel.SetText(i18n.T("Журнал сохранен: ", "Log saved: ") + filename)
+			app.SetStatus(i18n.T("Журнал сохранен: ", "Log saved: ") + filename)
 		}
 	}
 
@@ -1180,16 +1228,16 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 	}
 
 	log.Printf("[APP] Splitting tab %q for host %s (vertical=%v)", tab.Session.Title, targetHost.Name, vertical)
-	app.StatusLabel.SetText(i18n.T("Разделение экрана...", "Splitting screen..."))
+	app.SetStatus(i18n.T("Разделение экрана...", "Splitting screen..."))
 
 	term, err := vte.NewTerminal()
 	if err != nil {
-		app.StatusLabel.SetText(i18n.T("Ошибка создания VTE виджета: ", "Error creating VTE widget: ") + err.Error())
+		app.SetStatus(i18n.T("Ошибка создания VTE виджета: ", "Error creating VTE widget: ") + err.Error())
 		return
 	}
 	slaveFile, err := term.SetupNativePTY()
 	if err != nil {
-		app.StatusLabel.SetText(i18n.T("Ошибка инициализации PTY: ", "Error initializing PTY: ") + err.Error())
+		app.SetStatus(i18n.T("Ошибка инициализации PTY: ", "Error initializing PTY: ") + err.Error())
 		return
 	}
 
@@ -1209,7 +1257,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 		newSess, err := session.StartSessionWithBridge(context.Background(), targetHost, tab.Session.Title, app.settings.DefaultLogsDir, bridge, nil)
 		glib.IdleAdd(func() {
 			if err != nil {
-				app.StatusLabel.SetText(i18n.T("Ошибка создания сплита: ", "Error creating split: ") + err.Error())
+				app.SetStatus(i18n.T("Ошибка создания сплита: ", "Error creating split: ") + err.Error())
 				log.Printf("[APP] ERROR creating split session: %v", err)
 				return
 			}
@@ -1225,7 +1273,7 @@ func (app *AppWindow) handleSplit(sess *session.Session, vertical bool) {
 			if err != nil {
 				log.Printf("[APP] ERROR in SplitActiveTab: %v", err)
 			} else {
-				app.StatusLabel.SetText(i18n.T("Экран успешно разделен", "Screen split successfully"))
+				app.SetStatus(i18n.T("Экран успешно разделен", "Screen split successfully"))
 				log.Printf("[APP] Split created successfully")
 			}
 
@@ -1262,18 +1310,18 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 		app.connectToVNC(host)
 		return
 	}
-	app.StatusLabel.SetText(i18n.Tf("Подключение к %s...", "Connecting to %s...", host.Host))
+	app.SetStatus(i18n.Tf("Подключение к %s...", "Connecting to %s...", host.Host))
 
 	term, err := vte.NewTerminal()
 	if err != nil {
-		app.StatusLabel.SetText(i18n.T("Ошибка создания VTE виджета: ", "Error creating VTE widget: ") + err.Error())
+		app.SetStatus(i18n.T("Ошибка создания VTE виджета: ", "Error creating VTE widget: ") + err.Error())
 		log.Printf("[APP] ERROR creating VTE terminal: %v", err)
 		return
 	}
 
 	slaveFile, err := term.SetupNativePTY()
 	if err != nil {
-		app.StatusLabel.SetText(i18n.T("Ошибка инициализации PTY: ", "Error initializing PTY: ") + err.Error())
+		app.SetStatus(i18n.T("Ошибка инициализации PTY: ", "Error initializing PTY: ") + err.Error())
 		log.Printf("[APP] ERROR initializing native PTY: %v", err)
 		return
 	}
@@ -1303,7 +1351,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 		glib.IdleAdd(func() {
 			if err != nil {
 				errMsg := err.Error()
-				app.StatusLabel.SetText(i18n.T("Ошибка подключения: ", "Connection error: ") + errMsg)
+				app.SetStatus(i18n.T("Ошибка подключения: ", "Connection error: ") + errMsg)
 				log.Printf("[APP] ERROR connecting to host %s: %v", host.Name, err)
 
 				if host.Protocol == storage.ProtoSerial && strings.Contains(strings.ToLower(errMsg), "permission denied") {
@@ -1342,7 +1390,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 				app.SFTPPanel.AttachClient(sess.ID, host.ID, sess.SFTPClient, app.settings.DefaultEditor)
 			}
 
-			app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
+			app.SetStatus(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
 			log.Printf("[APP] Successfully connected and opened tab for: %s (sessionID=%s)", host.Name, sess.ID)
 
 			if app.settings.AutoRestoreSessions {
@@ -1358,7 +1406,7 @@ func (app *AppWindow) ConnectToHost(host *storage.Host) {
 // connectToRDP establishes a Remote Desktop connection either embedded in a tab or in a separate window
 func (app *AppWindow) connectToRDP(host *storage.Host) {
 	log.Printf("[APP] Initiating RDP connection to %s (%s:%d)", host.Name, host.Host, host.Port)
-	app.StatusLabel.SetText(i18n.Tf("Подключение по RDP к %s...", "Connecting via RDP to %s...", host.Host))
+	app.SetStatus(i18n.Tf("Подключение по RDP к %s...", "Connecting via RDP to %s...", host.Host))
 
 	var jumpClient *cryptoSsh.Client
 	if host.ProxyJumpHost != "" {
@@ -1399,18 +1447,18 @@ func (app *AppWindow) connectToRDP(host *storage.Host) {
 			rdpSess, err := rdp.ConnectRDP(context.Background(), host, xid, jumpClient)
 			glib.IdleAdd(func() {
 				if err != nil {
-					app.StatusLabel.SetText(i18n.T("Ошибка подключения RDP: ", "RDP connection error: ") + err.Error())
+					app.SetStatus(i18n.T("Ошибка подключения RDP: ", "RDP connection error: ") + err.Error())
 					app.ShowError(i18n.T("Ошибка подключения RDP", "RDP Connection Error"), err.Error())
 					app.TabView.CloseTab(tabItem)
 					return
 				}
 				sess.RDPSession = rdpSess
-				app.StatusLabel.SetText(i18n.Tf("Подключено (RDP): %s", "Connected (RDP): %s", host.Name))
+				app.SetStatus(i18n.Tf("Подключено (RDP): %s", "Connected (RDP): %s", host.Name))
 
 				rdpSess.OnExit = func(exitErr error) {
 					glib.IdleAdd(func() {
 						log.Printf("[APP] RDP session %s exited: %v", host.Name, exitErr)
-						app.StatusLabel.SetText(i18n.Tf("RDP сессия %s завершена", "RDP session %s closed", host.Name))
+						app.SetStatus(i18n.Tf("RDP сессия %s завершена", "RDP session %s closed", host.Name))
 						app.TabView.CloseTab(tabItem)
 					})
 				}
@@ -1422,19 +1470,19 @@ func (app *AppWindow) connectToRDP(host *storage.Host) {
 			rdpSess, err := rdp.ConnectRDP(context.Background(), host, 0, jumpClient)
 			glib.IdleAdd(func() {
 				if err != nil {
-					app.StatusLabel.SetText(i18n.T("Ошибка запуска RDP: ", "RDP launch error: ") + err.Error())
+					app.SetStatus(i18n.T("Ошибка запуска RDP: ", "RDP launch error: ") + err.Error())
 					app.ShowError(i18n.T("Ошибка RDP", "RDP Error"), err.Error())
 					return
 				}
 				sess.RDPSession = rdpSess
 				app.manager.Register(sess)
-				app.StatusLabel.SetText(i18n.Tf("Запущена RDP сессия (окно): %s", "RDP window session started: %s", host.Name))
+				app.SetStatus(i18n.Tf("Запущена RDP сессия (окно): %s", "RDP window session started: %s", host.Name))
 
 				rdpSess.OnExit = func(exitErr error) {
 					glib.IdleAdd(func() {
 						log.Printf("[APP] Standalone RDP session %s exited: %v", host.Name, exitErr)
 						app.manager.Unregister(sess.ID)
-						app.StatusLabel.SetText(i18n.Tf("RDP сессия %s завершена", "RDP session %s closed", host.Name))
+						app.SetStatus(i18n.Tf("RDP сессия %s завершена", "RDP session %s closed", host.Name))
 					})
 				}
 			})
@@ -1445,7 +1493,7 @@ func (app *AppWindow) connectToRDP(host *storage.Host) {
 // connectToVNC establishes a Virtual Network Computing (VNC) connection either embedded in a tab or in a separate window
 func (app *AppWindow) connectToVNC(host *storage.Host) {
 	log.Printf("[APP] Initiating VNC connection to %s (%s:%d)", host.Name, host.Host, host.Port)
-	app.StatusLabel.SetText(i18n.Tf("Подключение по VNC к %s...", "Connecting via VNC to %s...", host.Host))
+	app.SetStatus(i18n.Tf("Подключение по VNC к %s...", "Connecting via VNC to %s...", host.Host))
 
 	var jumpClient *cryptoSsh.Client
 	if host.ProxyJumpHost != "" {
@@ -1486,18 +1534,18 @@ func (app *AppWindow) connectToVNC(host *storage.Host) {
 			vncSess, err := vnc.ConnectVNC(context.Background(), host, xid, jumpClient)
 			glib.IdleAdd(func() {
 				if err != nil {
-					app.StatusLabel.SetText(i18n.T("Ошибка подключения VNC: ", "VNC connection error: ") + err.Error())
+					app.SetStatus(i18n.T("Ошибка подключения VNC: ", "VNC connection error: ") + err.Error())
 					app.ShowError(i18n.T("Ошибка подключения VNC", "VNC Connection Error"), err.Error())
 					app.TabView.CloseTab(tabItem)
 					return
 				}
 				sess.VNCSession = vncSess
-				app.StatusLabel.SetText(i18n.Tf("Подключено (VNC): %s", "Connected (VNC): %s", host.Name))
+				app.SetStatus(i18n.Tf("Подключено (VNC): %s", "Connected (VNC): %s", host.Name))
 
 				vncSess.OnExit = func(exitErr error) {
 					glib.IdleAdd(func() {
 						log.Printf("[APP] VNC session %s exited: %v", host.Name, exitErr)
-						app.StatusLabel.SetText(i18n.Tf("VNC сессия %s завершена", "VNC session %s closed", host.Name))
+						app.SetStatus(i18n.Tf("VNC сессия %s завершена", "VNC session %s closed", host.Name))
 						app.TabView.CloseTab(tabItem)
 					})
 				}
@@ -1509,19 +1557,19 @@ func (app *AppWindow) connectToVNC(host *storage.Host) {
 			vncSess, err := vnc.ConnectVNC(context.Background(), host, 0, jumpClient)
 			glib.IdleAdd(func() {
 				if err != nil {
-					app.StatusLabel.SetText(i18n.T("Ошибка запуска VNC: ", "VNC launch error: ") + err.Error())
+					app.SetStatus(i18n.T("Ошибка запуска VNC: ", "VNC launch error: ") + err.Error())
 					app.ShowError(i18n.T("Ошибка VNC", "VNC Error"), err.Error())
 					return
 				}
 				sess.VNCSession = vncSess
 				app.manager.Register(sess)
-				app.StatusLabel.SetText(i18n.Tf("Запущена VNC сессия (окно): %s", "VNC window session started: %s", host.Name))
+				app.SetStatus(i18n.Tf("Запущена VNC сессия (окно): %s", "VNC window session started: %s", host.Name))
 
 				vncSess.OnExit = func(exitErr error) {
 					glib.IdleAdd(func() {
 						log.Printf("[APP] Standalone VNC session %s exited: %v", host.Name, exitErr)
 						app.manager.Unregister(sess.ID)
-						app.StatusLabel.SetText(i18n.Tf("VNC сессия %s завершена", "VNC session %s closed", host.Name))
+						app.SetStatus(i18n.Tf("VNC сессия %s завершена", "VNC session %s closed", host.Name))
 					})
 				}
 			})
@@ -1541,7 +1589,7 @@ func (app *AppWindow) RestoreSavedSessions() {
 	}
 
 	log.Printf("[RESTORE] Restoring %d saved session(s)...", len(savedSessions))
-	app.StatusLabel.SetText(i18n.Tf("Восстановление %d сессий...", "Restoring %d sessions...", len(savedSessions)))
+	app.SetStatus(i18n.Tf("Восстановление %d сессий...", "Restoring %d sessions...", len(savedSessions)))
 
 	// Group sessions by TabIndex
 	type tabGroup struct {
@@ -1655,6 +1703,10 @@ func (app *AppWindow) RestoreSavedSessions() {
 		hostCopy := h
 		splitStates := splits
 
+		if hostCopy.Protocol == storage.ProtoLocal && savedState.WorkingDir != "" {
+			hostCopy.Notes = savedState.WorkingDir
+		}
+
 		go func() {
 			log.Printf("[RESTORE] Starting session %q: host_id=%q proto=%s host=%q port=%d user=%q key=%q",
 				savedState.Title, hostCopy.ID, hostCopy.Protocol, hostCopy.Host, hostCopy.Port, hostCopy.Username, hostCopy.KeyPath)
@@ -1733,6 +1785,22 @@ func (app *AppWindow) RestoreSavedSessions() {
 
 				app.attachSessionExitHandler(sess, term, hostCopy, savedState.Title)
 				app.wireSerialAutoBaud(sess, hostCopy, term)
+
+				if savedState.WorkingDir != "" && savedState.WorkingDir != "~" {
+					targetDir := savedState.WorkingDir
+					go func() {
+						time.Sleep(500 * time.Millisecond)
+						glib.IdleAdd(func() {
+							if term != nil {
+								term.FeedChild(fmt.Sprintf("cd %q\n", targetDir))
+							}
+							if sess.SFTPClient != nil {
+								sess.SFTPClient.SetCurrentDir(targetDir)
+								app.SFTPPanel.LoadDirectory(targetDir)
+							}
+						})
+					}()
+				}
 
 				finishSessionRestore()
 
@@ -1813,8 +1881,13 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 	}
 	bridge := pty.FromSlave(slaveFile)
 
+	hCopy := *h
+	if hCopy.Protocol == storage.ProtoLocal && st.WorkingDir != "" {
+		hCopy.Notes = st.WorkingDir
+	}
+
 	go func() {
-		sess, err := session.StartSessionWithBridge(context.Background(), h, st.Title, app.settings.DefaultLogsDir, bridge, nil)
+		sess, err := session.StartSessionWithBridge(context.Background(), &hCopy, st.Title, app.settings.DefaultLogsDir, bridge, nil)
 		glib.IdleAdd(func() {
 			defer func() {
 				if onDone != nil {
@@ -1870,8 +1943,73 @@ func (app *AppWindow) restoreSplitPane(tabItem *TabItem, st storage.SavedSession
 			_ = app.TabView.SplitPane(tabItem, targetParent, sess, term, isVertical)
 			app.attachSessionExitHandler(sess, term, h, st.Title)
 			app.wireSerialAutoBaud(sess, h, term)
+
+			if st.WorkingDir != "" && st.WorkingDir != "~" {
+				targetDir := st.WorkingDir
+				go func() {
+					time.Sleep(500 * time.Millisecond)
+					glib.IdleAdd(func() {
+						if term != nil {
+							term.FeedChild(fmt.Sprintf("cd %q\n", targetDir))
+						}
+						if sess.SFTPClient != nil {
+							sess.SFTPClient.SetCurrentDir(targetDir)
+						}
+					})
+				}()
+			}
 		})
 	}()
+}
+
+// determinePaneWorkingDir discovers the current working directory of a terminal pane using all available sources:
+// 1. VTE Terminal OSC 7 / current directory URI
+// 2. LocalSession /proc/<pid>/cwd for local processes
+// 3. SFTP tracker / window title path tracker
+// 4. SFTP client current directory
+func determinePaneWorkingDir(pane *TerminalPane) string {
+	if pane == nil || pane.Session == nil {
+		return "/"
+	}
+	s := pane.Session
+
+	// 1. Check VTE terminal native directory URI (OSC 7 support)
+	if pane.Terminal != nil {
+		if uri := pane.Terminal.GetCurrentDirectoryURI(); uri != "" {
+			if u, err := url.Parse(uri); err == nil && u.Scheme == "file" && u.Path != "" {
+				return u.Path
+			} else if strings.HasPrefix(uri, "file://") {
+				return strings.TrimPrefix(uri, "file://")
+			}
+		}
+	}
+
+	// 2. For local sessions, inspect /proc/<pid>/cwd
+	if s.LocalSession != nil {
+		if d := s.LocalSession.CurrentDir(); d != "" {
+			return d
+		}
+	}
+
+	// 3. For remote SSH/telnet sessions, inspect path tracker (OSC 7 / OSC 0/2 window title parser)
+	if s.Tracker != nil {
+		if d := s.Tracker.GetLastPath(); d != "" {
+			return d
+		}
+	}
+
+	// 4. SFTP client active directory
+	if s.SFTPClient != nil {
+		if d := s.SFTPClient.CurrentDir(); d != "" && d != "/" {
+			return d
+		}
+	}
+
+	if s.SFTPClient != nil && s.SFTPClient.CurrentDir() != "" {
+		return s.SFTPClient.CurrentDir()
+	}
+
+	return "/"
 }
 
 // SaveAllSessionState dumps current tab layout and all nested split panes into SQLite
@@ -1925,10 +2063,7 @@ func (app *AppWindow) SaveAllSessionState() {
 				scrollback = s.GetScrollbackText()
 			}
 			scrollback = session.CleanScrollbackDump(scrollback)
-			workingDir := "/"
-			if s.SFTPClient != nil {
-				workingDir = s.SFTPClient.CurrentDir()
-			}
+			workingDir := determinePaneWorkingDir(pane)
 			parentID := ""
 			splitDir := "none"
 			if paneIdx > 0 {
@@ -2031,10 +2166,7 @@ func (app *AppWindow) SaveAllSessionStateSync() {
 				scrollback = s.GetScrollbackText()
 			}
 			scrollback = session.CleanScrollbackDump(scrollback)
-			workingDir := "/"
-			if s.SFTPClient != nil {
-				workingDir = s.SFTPClient.CurrentDir()
-			}
+			workingDir := determinePaneWorkingDir(pane)
 			parentID := ""
 			splitDir := "none"
 			if paneIdx > 0 {
@@ -2115,13 +2247,13 @@ func (app *AppWindow) setSessionDisconnected(sess *session.Session, term *vte.Te
 		term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка подключения: ", "Connection error: ") + reasonErr.Error() + "\x1b[0m\r\n")
 	}
 	term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
-	app.StatusLabel.SetText(i18n.Tf("Сессия %s закрыта", "Session %s closed", host.Name))
+	app.SetStatus(i18n.Tf("Сессия %s закрыта", "Session %s closed", host.Name))
 
 	var reconnectFunc func()
 	reconnectFunc = func() {
 		term.SetDisconnected(false, nil)
 		term.FeedText("\r\n\x1b[1;36m" + i18n.T("[Переподключение...]", "[Reconnecting...]") + "\x1b[0m\r\n")
-		app.StatusLabel.SetText(i18n.Tf("Переподключение к %s...", "Reconnecting to %s...", host.Host))
+		app.SetStatus(i18n.Tf("Переподключение к %s...", "Reconnecting to %s...", host.Host))
 
 		slaveFile, err := term.SetupNativePTY()
 		if err != nil {
@@ -2144,7 +2276,7 @@ func (app *AppWindow) setSessionDisconnected(sess *session.Session, term *vte.Te
 					term.FeedText("\r\n\x1b[1;31m" + i18n.T("Ошибка подключения: ", "Connection error: ") + err.Error() + "\x1b[0m\r\n")
 					term.FeedText("\x1b[1;33m" + i18n.T("[Сессия закрыта. Переподключить? (Нажмите Enter)]", "[Session closed. Reconnect? (Press Enter)]") + "\x1b[0m\r\n")
 					term.SetDisconnected(true, reconnectFunc)
-					app.StatusLabel.SetText(i18n.T("Ошибка переподключения: ", "Reconnection error: ") + err.Error())
+					app.SetStatus(i18n.T("Ошибка переподключения: ", "Reconnection error: ") + err.Error())
 					return
 				}
 
@@ -2165,7 +2297,7 @@ func (app *AppWindow) setSessionDisconnected(sess *session.Session, term *vte.Te
 					app.SFTPPanel.AttachClient(newSess.ID, host.ID, newSess.SFTPClient, app.settings.DefaultEditor)
 				}
 
-				app.StatusLabel.SetText(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
+				app.SetStatus(i18n.Tf("Подключено: %s (%s)", "Connected: %s (%s)", host.Name, host.Host))
 				log.Printf("[APP] Reconnected session for: %s (new sessionID=%s)", host.Name, newSess.ID)
 
 				if app.settings.AutoRestoreSessions {
@@ -2475,7 +2607,7 @@ func (app *AppWindow) showSerialPermissionDialog(host *storage.Host, errMsg stri
 		fixSuccess := app.applySerialPortPermissions(dlg, username, devPath)
 		if fixSuccess {
 			dlg.Destroy()
-			app.StatusLabel.SetText(i18n.T("Права на COM-порт успешно настроены", "Serial port permissions configured successfully"))
+			app.SetStatus(i18n.T("Права на COM-порт успешно настроены", "Serial port permissions configured successfully"))
 			// Automatically connect now that permissions are granted!
 			app.ConnectToHost(host)
 			return
@@ -2633,14 +2765,14 @@ func (app *AppWindow) showBaudRateSuggestion(sess *session.Session, host *storag
 
 		if resp == gtk.RESPONSE_APPLY {
 			if err := sess.SetSerialBaudRate(detectedBaud); err != nil {
-				app.StatusLabel.SetText(i18n.Tf("Ошибка смены скорости: %v", "Error switching baud rate: %v", err))
+				app.SetStatus(i18n.Tf("Ошибка смены скорости: %v", "Error switching baud rate: %v", err))
 				term.FeedText(fmt.Sprintf("\r\n\x1b[1;31m%s\x1b[0m\r\n",
 					i18n.Tf("[Ошибка смены скорости: %v]", "[Error switching baud rate: %v]", err)))
 				return
 			}
 			host.SerialBaudRate = detectedBaud
 			_ = app.store.SaveHost(host)
-			app.StatusLabel.SetText(i18n.Tf("Скорость COM-порта установлена в %d бод", "COM port baud rate set to %d baud", detectedBaud))
+			app.SetStatus(i18n.Tf("Скорость COM-порта установлена в %d бод", "COM port baud rate set to %d baud", detectedBaud))
 			term.FeedText(fmt.Sprintf("\r\n\x1b[1;32m%s\x1b[0m\r\n",
 				i18n.Tf("[⚡ Скорость COM-порта успешно переключена на %d бод]", "[⚡ Serial baud rate successfully switched to %d baud]", detectedBaud)))
 		}

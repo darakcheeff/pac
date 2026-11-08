@@ -261,7 +261,11 @@ func BuildVNCArgs(binPath string, host *storage.Host, targetHost string, targetP
 			args = append(args, fmt.Sprintf("-CompressLevel=%d", host.VNCCompression))
 		}
 		if host.VNCEncoding != "" && host.VNCEncoding != "auto" {
-			args = append(args, fmt.Sprintf("-PreferredEncoding=%s", strings.Title(host.VNCEncoding)))
+			enc := host.VNCEncoding
+			if len(enc) > 0 {
+				enc = strings.ToUpper(enc[:1]) + enc[1:]
+			}
+			args = append(args, fmt.Sprintf("-PreferredEncoding=%s", enc))
 		}
 
 		target := fmt.Sprintf("%s::%d", targetHost, targetPort)
