@@ -156,4 +156,52 @@ func TestStorageCRUD(t *testing.T) {
 	if err != nil || len(saved) != 1 || saved[0].ScrollbackDump != "RouterOS v7.14 prompt>" {
 		t.Fatalf("unexpected saved sessions: %+v, err: %v", saved, err)
 	}
+
+	// Verify SaveActiveSessionsDelta updates metadata without overwriting scrollback, upserts dirty panes, and deletes closed ones
+	upserts := []SavedSessionState{
+		{
+			ID:             "sess-2",
+			HostID:         "host-1",
+			Title:          "Tab 2",
+			Protocol:       ProtoSSH,
+			TabIndex:       1,
+			PaneIndex:      0,
+			WorkingDir:     "/var/log",
+			ScrollbackDump: "Tab 2 history",
+		},
+	}
+	metaOnly := []SavedSessionState{
+		{
+			ID:         "sess-1",
+			HostID:     "host-1",
+			Title:      "Tab 1 Renamed",
+			Protocol:   ProtoSSH,
+			TabIndex:   0,
+			PaneIndex:  0,
+			WorkingDir: "/tmp",
+		},
+	}
+	if err := store.SaveActiveSessionsDelta(upserts, metaOnly, nil); err != nil {
+		t.Fatalf("failed SaveActiveSessionsDelta: %v", err)
+	}
+
+	saved, err = store.GetSavedSessions()
+	if err != nil || len(saved) != 2 {
+		t.Fatalf("expected 2 saved sessions after delta, got %d (err=%v)", len(saved), err)
+	}
+	if saved[0].ID != "sess-1" || saved[0].Title != "Tab 1 Renamed" || saved[0].WorkingDir != "/tmp" || saved[0].ScrollbackDump != "RouterOS v7.14 prompt>" {
+		t.Fatalf("expected sess-1 scrollback preserved and metadata updated, got: %+v", saved[0])
+	}
+	if saved[1].ID != "sess-2" || saved[1].ScrollbackDump != "Tab 2 history" {
+		t.Fatalf("unexpected sess-2 state: %+v", saved[1])
+	}
+
+	// Delete sess-1 via delta
+	if err := store.SaveActiveSessionsDelta(nil, nil, []string{"sess-1"}); err != nil {
+		t.Fatalf("failed SaveActiveSessionsDelta delete: %v", err)
+	}
+	saved, err = store.GetSavedSessions()
+	if err != nil || len(saved) != 1 || saved[0].ID != "sess-2" {
+		t.Fatalf("expected only sess-2 remaining, got: %+v (err=%v)", saved, err)
+	}
 }

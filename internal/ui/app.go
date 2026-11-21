@@ -41,7 +41,7 @@ import (
 var appIconBytes []byte
 
 // AppVersion represents the current application release/build version
-const AppVersion = "v1.1.1"
+const AppVersion = "v1.1.2"
 
 // AppWindow represents the primary application window
 type AppWindow struct {
@@ -59,15 +59,18 @@ type AppWindow struct {
 	StatusBar    *gtk.Statusbar
 	StatusLabel  *gtk.Label
 
-	store       *storage.Store
-	manager     *session.Manager
-	watcherMgr  *watcher.RemoteEditManager
-	settings    *storage.AppSettings
-	isRestoring   bool
-	restoreMu     sync.Mutex
-	lastSavedHash string
-	lastSavedMu   sync.Mutex
-	currentTheme  string
+	store               *storage.Store
+	manager             *session.Manager
+	watcherMgr          *watcher.RemoteEditManager
+	settings            *storage.AppSettings
+	isRestoring         bool
+	restoreMu           sync.Mutex
+	lastSavedHash       string
+	lastSavedActiveTab  int
+	lastSavedPaneMeta   map[string]string
+	lastSavedPaneScroll map[string]string
+	lastSavedMu         sync.Mutex
+	currentTheme        string
 	btnTheme      *gtk.ToolButton
 	btnExit       *gtk.ToolButton
 	themeProvider *gtk.CssProvider
@@ -665,12 +668,15 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 		BroadcastBar: broadcastBar,
 		StatusBar:    statusBar,
 		StatusLabel:  statusLabel,
-		store:        store,
-		manager:      manager,
-		watcherMgr:   watcherMgr,
-		settings:     settings,
-		isRestoring:  true, // Prevent overwriting state before restore completes
-		activeBaudBars: make(map[string]*gtk.InfoBar),
+		store:               store,
+		manager:             manager,
+		watcherMgr:          watcherMgr,
+		settings:            settings,
+		isRestoring:         true, // Prevent overwriting state before restore completes
+		lastSavedActiveTab:  -1,
+		lastSavedPaneMeta:   make(map[string]string),
+		lastSavedPaneScroll: make(map[string]string),
+		activeBaudBars:      make(map[string]*gtk.InfoBar),
 	}
 
 	app.setupMenuAndToolbar()
@@ -686,9 +692,9 @@ func NewAppWindow(store *storage.Store) (*AppWindow, error) {
 	}
 	app.applyTheme(initTheme)
 
-	// Periodic auto-save of active session state (every 30 seconds with diff checking)
+	// Periodic auto-save of active session state (every 4 minutes, saving only changed delta)
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(4 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			app.restoreMu.Lock()
@@ -1626,17 +1632,41 @@ func (app *AppWindow) RestoreSavedSessions() {
 	finishSessionRestore := func() {
 		restoredCount++
 		if restoredCount >= totalSessions {
-			app.restoreMu.Lock()
-			app.isRestoring = false
-			app.restoreMu.Unlock()
-			log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
-
 			app.TabView.ReorderTabsByTargetIndex()
 			if savedActiveIdx, sErr := app.store.GetSetting("active_tab_index"); sErr == nil && savedActiveIdx != "" {
 				if idx, aErr := strconv.Atoi(savedActiveIdx); aErr == nil && idx >= 0 && idx < len(app.TabView.items) {
 					app.TabView.Notebook.SetCurrentPage(idx)
+					app.lastSavedMu.Lock()
+					app.lastSavedActiveTab = idx
+					app.lastSavedMu.Unlock()
 				}
 			}
+
+			// Seed delta caches from restored database rows and clear initial dirty/unread flags
+			app.lastSavedMu.Lock()
+			for _, st := range savedSessions {
+				metaKey := fmt.Sprintf("%s|%s|%s|%d|%d|%s|%s|%s|%s|%s",
+					st.HostID, st.Title, st.Protocol, st.TabIndex, st.PaneIndex,
+					st.SplitParentID, st.SplitDirection, st.WorkingDir, st.Notes, st.HostSnapshot)
+				app.lastSavedPaneMeta[st.ID] = metaKey
+				scrollSum := sha256.Sum256([]byte(st.ScrollbackDump))
+				app.lastSavedPaneScroll[st.ID] = hex.EncodeToString(scrollSum[:])
+			}
+			app.lastSavedMu.Unlock()
+
+			for _, item := range app.TabView.items {
+				for _, p := range item.Panes {
+					p.HasUnsavedChanges = false
+					p.HasUnreadActivity = false
+					p.SuppressActivityFor(1500 * time.Millisecond)
+				}
+				app.TabView.UpdateTabTitle(item)
+			}
+
+			app.restoreMu.Lock()
+			app.isRestoring = false
+			app.restoreMu.Unlock()
+			log.Printf("[RESTORE] All %d sessions restored. isRestoring cleared.", restoredCount)
 		}
 	}
 
@@ -2012,7 +2042,167 @@ func determinePaneWorkingDir(pane *TerminalPane) string {
 	return "/"
 }
 
-// SaveAllSessionState dumps current tab layout and all nested split panes into SQLite
+// rawPaneSnapshot holds lightweight UI state collected on the GTK thread for background processing
+type rawPaneSnapshot struct {
+	state         storage.SavedSessionState
+	metaKey       string
+	dirtyContent  bool
+	rawScrollback string
+}
+
+// collectPaneSnapshots gathers lightweight metadata for all open panes on the GTK thread
+// and extracts the tail scrollback (last 1000 lines) ONLY for panes marked with HasUnsavedChanges.
+func (app *AppWindow) collectPaneSnapshots(forceAllContent bool) ([]rawPaneSnapshot, int) {
+	app.TabView.SyncItemsWithNotebook()
+	curPage := app.TabView.Notebook.GetCurrentPage()
+
+	app.lastSavedMu.Lock()
+	knownScroll := make(map[string]bool, len(app.lastSavedPaneScroll))
+	for k := range app.lastSavedPaneScroll {
+		knownScroll[k] = true
+	}
+	app.lastSavedMu.Unlock()
+
+	var snapshots []rawPaneSnapshot
+	for sliceIdx, item := range app.TabView.items {
+		tabIdx := app.TabView.Notebook.PageNum(item.ContentBox)
+		if tabIdx < 0 {
+			tabIdx = sliceIdx
+		}
+		for paneIdx, pane := range item.Panes {
+			s := pane.Session
+			if s == nil {
+				continue
+			}
+			hostID := ""
+			protocol := storage.ProtoLocal
+			hostSnapshot := ""
+			if s.Host != nil {
+				hostID = s.Host.ID
+				protocol = s.Host.Protocol
+				if strings.HasPrefix(hostID, "quick-") {
+					if snap, err := json.Marshal(s.Host); err == nil {
+						hostSnapshot = string(snap)
+					}
+				}
+			}
+			workingDir := determinePaneWorkingDir(pane)
+			parentID := ""
+			splitDir := "none"
+			if paneIdx > 0 {
+				parentID = pane.ParentSessionID
+				if parentID == "" && len(item.Panes) > 0 && item.Panes[0].Session != nil {
+					parentID = item.Panes[0].Session.ID
+				}
+				splitDir = pane.SplitDirection
+				if splitDir == "" {
+					splitDir = "horizontal"
+				}
+			}
+
+			dirty := forceAllContent || pane.HasUnsavedChanges || !knownScroll[s.ID]
+			rawScroll := ""
+			if dirty {
+				if pane.Terminal != nil {
+					rawScroll = pane.Terminal.GetTailCleanText(1000)
+				}
+				if rawScroll == "" {
+					rawScroll = s.GetScrollbackText()
+				}
+				pane.HasUnsavedChanges = false
+			}
+
+			st := storage.SavedSessionState{
+				ID:             s.ID,
+				HostID:         hostID,
+				Title:          s.Title,
+				Protocol:       protocol,
+				TabIndex:       tabIdx,
+				PaneIndex:      paneIdx,
+				SplitParentID:  parentID,
+				SplitDirection: splitDir,
+				WorkingDir:     workingDir,
+				Notes:          s.Notes,
+				SavedAt:        time.Now(),
+				HostSnapshot:   hostSnapshot,
+			}
+			metaKey := fmt.Sprintf("%s|%s|%s|%d|%d|%s|%s|%s|%s|%s",
+				st.HostID, st.Title, st.Protocol, st.TabIndex, st.PaneIndex,
+				st.SplitParentID, st.SplitDirection, st.WorkingDir, st.Notes, st.HostSnapshot)
+
+			snapshots = append(snapshots, rawPaneSnapshot{
+				state:         st,
+				metaKey:       metaKey,
+				dirtyContent:  dirty,
+				rawScrollback: rawScroll,
+			})
+		}
+	}
+	return snapshots, curPage
+}
+
+// persistPaneSnapshotsDelta computes scrollback cleanup, hashes, and writes only changed rows to SQLite
+func (app *AppWindow) persistPaneSnapshotsDelta(snapshots []rawPaneSnapshot, curPage int) {
+	app.lastSavedMu.Lock()
+	defer app.lastSavedMu.Unlock()
+
+	if curPage >= 0 && curPage != app.lastSavedActiveTab {
+		_ = app.store.SaveSetting("active_tab_index", fmt.Sprintf("%d", curPage))
+		app.lastSavedActiveTab = curPage
+	}
+
+	activeIDs := make(map[string]bool, len(snapshots))
+	var upserts []storage.SavedSessionState
+	var metadataOnly []storage.SavedSessionState
+
+	for _, snap := range snapshots {
+		id := snap.state.ID
+		activeIDs[id] = true
+		prevMeta, existed := app.lastSavedPaneMeta[id]
+
+		if snap.dirtyContent || !existed {
+			cleaned := session.CleanScrollbackDump(snap.rawScrollback)
+			snap.state.ScrollbackDump = cleaned
+			sum := sha256.Sum256([]byte(cleaned))
+			scrollHash := hex.EncodeToString(sum[:])
+
+			prevScrollHash := app.lastSavedPaneScroll[id]
+			if !existed || scrollHash != prevScrollHash {
+				upserts = append(upserts, snap.state)
+				app.lastSavedPaneScroll[id] = scrollHash
+				app.lastSavedPaneMeta[id] = snap.metaKey
+				continue
+			}
+		}
+
+		// Scrollback did not change; check if lightweight metadata (tab index, working_dir, title, notes) changed
+		if snap.metaKey != prevMeta {
+			metadataOnly = append(metadataOnly, snap.state)
+			app.lastSavedPaneMeta[id] = snap.metaKey
+		}
+	}
+
+	var deletedIDs []string
+	for oldID := range app.lastSavedPaneMeta {
+		if !activeIDs[oldID] {
+			deletedIDs = append(deletedIDs, oldID)
+			delete(app.lastSavedPaneMeta, oldID)
+			delete(app.lastSavedPaneScroll, oldID)
+		}
+	}
+
+	if len(upserts) == 0 && len(metadataOnly) == 0 && len(deletedIDs) == 0 {
+		return
+	}
+
+	log.Printf("[STATE] Delta save: %d content upsert(s), %d metadata update(s), %d deleted session(s)",
+		len(upserts), len(metadataOnly), len(deletedIDs))
+	if err := app.store.SaveActiveSessionsDelta(upserts, metadataOnly, deletedIDs); err != nil {
+		log.Printf("[STATE] Error saving session delta to SQLite: %v", err)
+	}
+}
+
+// SaveAllSessionState dumps only modified panes/metadata and writes delta asynchronously to SQLite
 func (app *AppWindow) SaveAllSessionState() {
 	app.restoreMu.Lock()
 	if app.isRestoring {
@@ -2021,105 +2211,11 @@ func (app *AppWindow) SaveAllSessionState() {
 	}
 	app.restoreMu.Unlock()
 
-	// Ensure items slice reflects current notebook page order
-	app.TabView.SyncItemsWithNotebook()
-
-	// Save active tab index
-	curPage := app.TabView.Notebook.GetCurrentPage()
-	if curPage >= 0 {
-		_ = app.store.SaveSetting("active_tab_index", fmt.Sprintf("%d", curPage))
-	}
-
-	var states []storage.SavedSessionState
-	for sliceIdx, item := range app.TabView.items {
-		tabIdx := app.TabView.Notebook.PageNum(item.ContentBox)
-		if tabIdx < 0 {
-			tabIdx = sliceIdx
-		}
-		for paneIdx, pane := range item.Panes {
-			s := pane.Session
-			if s == nil {
-				continue
-			}
-			hostID := ""
-			protocol := storage.ProtoLocal
-			hostSnapshot := ""
-			if s.Host != nil {
-				hostID = s.Host.ID
-				protocol = s.Host.Protocol
-				// For Quick Connect hosts (not saved in the DB), embed the full
-				// host config as JSON so it can be restored without a DB lookup.
-				if strings.HasPrefix(hostID, "quick-") {
-					if snap, err := json.Marshal(s.Host); err == nil {
-						hostSnapshot = string(snap)
-					}
-				}
-			}
-			scrollback := ""
-			if pane.Terminal != nil {
-				scrollback = pane.Terminal.GetCleanText()
-			}
-			if scrollback == "" {
-				scrollback = s.GetScrollbackText()
-			}
-			scrollback = session.CleanScrollbackDump(scrollback)
-			workingDir := determinePaneWorkingDir(pane)
-			parentID := ""
-			splitDir := "none"
-			if paneIdx > 0 {
-				parentID = pane.ParentSessionID
-				if parentID == "" && len(item.Panes) > 0 && item.Panes[0].Session != nil {
-					parentID = item.Panes[0].Session.ID
-				}
-				splitDir = pane.SplitDirection
-				if splitDir == "" {
-					splitDir = "horizontal"
-				}
-			}
-
-			st := storage.SavedSessionState{
-				ID:             s.ID,
-				HostID:         hostID,
-				Title:          s.Title,
-				Protocol:       protocol,
-				TabIndex:       tabIdx,
-				PaneIndex:      paneIdx,
-				SplitParentID:  parentID,
-				SplitDirection: splitDir,
-				WorkingDir:     workingDir,
-				ScrollbackDump: scrollback,
-				Notes:          s.Notes,
-				SavedAt:        time.Now(),
-				HostSnapshot:   hostSnapshot,
-			}
-			states = append(states, st)
-		}
-	}
-	hasher := sha256.New()
-	for _, st := range states {
-		fmt.Fprintf(hasher, "%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%s;",
-			st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.PaneIndex,
-			st.SplitParentID, st.SplitDirection, st.WorkingDir, st.Notes, st.ScrollbackDump)
-	}
-	currentHash := hex.EncodeToString(hasher.Sum(nil))
-
-	app.lastSavedMu.Lock()
-	if currentHash == app.lastSavedHash {
-		app.lastSavedMu.Unlock()
-		return
-	}
-	app.lastSavedHash = currentHash
-	app.lastSavedMu.Unlock()
-
-	log.Printf("[STATE] Saving %d active pane(s) across %d tab(s) to SQLite...", len(states), len(app.TabView.items))
-	go func(st []storage.SavedSessionState) {
-		if err := app.store.SaveActiveSessions(st); err != nil {
-			log.Printf("[STATE] Error saving active sessions to SQLite: %v", err)
-		}
-	}(states)
+	snapshots, curPage := app.collectPaneSnapshots(false)
+	go app.persistPaneSnapshotsDelta(snapshots, curPage)
 }
 
-// SaveAllSessionStateSync dumps and writes state synchronously to SQLite (used during Quit)
+// SaveAllSessionStateSync dumps and writes changed session state delta synchronously to SQLite (used during Quit)
 func (app *AppWindow) SaveAllSessionStateSync() {
 	app.restoreMu.Lock()
 	if app.isRestoring {
@@ -2128,78 +2224,8 @@ func (app *AppWindow) SaveAllSessionStateSync() {
 	}
 	app.restoreMu.Unlock()
 
-	app.TabView.SyncItemsWithNotebook()
-
-	curPage := app.TabView.Notebook.GetCurrentPage()
-	if curPage >= 0 {
-		_ = app.store.SaveSetting("active_tab_index", fmt.Sprintf("%d", curPage))
-	}
-
-	var states []storage.SavedSessionState
-	for sliceIdx, item := range app.TabView.items {
-		tabIdx := app.TabView.Notebook.PageNum(item.ContentBox)
-		if tabIdx < 0 {
-			tabIdx = sliceIdx
-		}
-		for paneIdx, pane := range item.Panes {
-			s := pane.Session
-			if s == nil {
-				continue
-			}
-			hostID := ""
-			protocol := storage.ProtoLocal
-			hostSnapshot := ""
-			if s.Host != nil {
-				hostID = s.Host.ID
-				protocol = s.Host.Protocol
-				if strings.HasPrefix(hostID, "quick-") {
-					if snap, err := json.Marshal(s.Host); err == nil {
-						hostSnapshot = string(snap)
-					}
-				}
-			}
-			scrollback := ""
-			if pane.Terminal != nil {
-				scrollback = pane.Terminal.GetCleanText()
-			}
-			if scrollback == "" {
-				scrollback = s.GetScrollbackText()
-			}
-			scrollback = session.CleanScrollbackDump(scrollback)
-			workingDir := determinePaneWorkingDir(pane)
-			parentID := ""
-			splitDir := "none"
-			if paneIdx > 0 {
-				parentID = pane.ParentSessionID
-				if parentID == "" && len(item.Panes) > 0 && item.Panes[0].Session != nil {
-					parentID = item.Panes[0].Session.ID
-				}
-				splitDir = pane.SplitDirection
-				if splitDir == "" {
-					splitDir = "horizontal"
-				}
-			}
-
-			st := storage.SavedSessionState{
-				ID:             s.ID,
-				HostID:         hostID,
-				Title:          s.Title,
-				Protocol:       protocol,
-				TabIndex:       tabIdx,
-				PaneIndex:      paneIdx,
-				SplitParentID:  parentID,
-				SplitDirection: splitDir,
-				WorkingDir:     workingDir,
-				ScrollbackDump: scrollback,
-				Notes:          s.Notes,
-				SavedAt:        time.Now(),
-				HostSnapshot:   hostSnapshot,
-			}
-			states = append(states, st)
-		}
-	}
-
-	_ = app.store.SaveActiveSessions(states)
+	snapshots, curPage := app.collectPaneSnapshots(false)
+	app.persistPaneSnapshotsDelta(snapshots, curPage)
 }
 
 // Quit saves session states and exits cleanly

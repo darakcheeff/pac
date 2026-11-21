@@ -606,6 +606,90 @@ func (s *Store) SaveActiveSessions(states []SavedSessionState) error {
 	return tx.Commit()
 }
 
+// SaveActiveSessionsDelta writes only changed or newly created sessions (upserts), updates lightweight
+// metadata for sessions whose scrollback has not changed (metadataOnly), and deletes closed sessions.
+func (s *Store) SaveActiveSessionsDelta(upserts []SavedSessionState, metadataOnly []SavedSessionState, deletedIDs []string) error {
+	if len(upserts) == 0 && len(metadataOnly) == 0 && len(deletedIDs) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+
+	for _, id := range deletedIDs {
+		if _, err := tx.Exec("DELETE FROM saved_sessions WHERE id = ?", id); err != nil {
+			return err
+		}
+	}
+
+	if len(upserts) > 0 {
+		upsertStmt, err := tx.Prepare(`INSERT INTO saved_sessions (
+			id, host_id, title, protocol, tab_index, split_parent_id, split_direction,
+			working_dir, scrollback_dump, notes, saved_at, host_snapshot, pane_index
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			host_id = excluded.host_id,
+			title = excluded.title,
+			protocol = excluded.protocol,
+			tab_index = excluded.tab_index,
+			split_parent_id = excluded.split_parent_id,
+			split_direction = excluded.split_direction,
+			working_dir = excluded.working_dir,
+			scrollback_dump = excluded.scrollback_dump,
+			notes = excluded.notes,
+			saved_at = excluded.saved_at,
+			host_snapshot = excluded.host_snapshot,
+			pane_index = excluded.pane_index`)
+		if err != nil {
+			return err
+		}
+		defer upsertStmt.Close()
+
+		for _, st := range upserts {
+			if _, err := upsertStmt.Exec(
+				st.ID, st.HostID, st.Title, st.Protocol, st.TabIndex, st.SplitParentID,
+				st.SplitDirection, st.WorkingDir, st.ScrollbackDump, st.Notes, now,
+				st.HostSnapshot, st.PaneIndex,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(metadataOnly) > 0 {
+		metaStmt, err := tx.Prepare(`UPDATE saved_sessions SET
+			host_id = ?, title = ?, protocol = ?, tab_index = ?,
+			split_parent_id = ?, split_direction = ?, working_dir = ?,
+			notes = ?, saved_at = ?, host_snapshot = ?, pane_index = ?
+		WHERE id = ?`)
+		if err != nil {
+			return err
+		}
+		defer metaStmt.Close()
+
+		for _, st := range metadataOnly {
+			if _, err := metaStmt.Exec(
+				st.HostID, st.Title, st.Protocol, st.TabIndex,
+				st.SplitParentID, st.SplitDirection, st.WorkingDir,
+				st.Notes, now, st.HostSnapshot, st.PaneIndex,
+				st.ID,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
 // --- App Settings ---
 
 func (s *Store) GetSettings() (*AppSettings, error) {

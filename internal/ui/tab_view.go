@@ -81,14 +81,32 @@ func (tv *TabView) getTabByPageWidget(page *gtk.Widget) *TabItem {
 
 // TerminalPane represents an individual terminal pane inside a tab
 type TerminalPane struct {
-	Session           *session.Session
-	Terminal          *vte.Terminal
-	Box               *gtk.Box
-	Search            *SearchBar
-	TabItem           *TabItem
-	ParentSessionID   string
-	SplitDirection    string
-	HasUnreadActivity bool
+	Session             *session.Session
+	Terminal            *vte.Terminal
+	Box                 *gtk.Box
+	Search              *SearchBar
+	TabItem             *TabItem
+	ParentSessionID     string
+	SplitDirection      string
+	HasUnreadActivity   bool
+	HasUnsavedChanges   bool
+	hoverFocusSent      bool
+	ignoreActivityUntil time.Time
+	lastScreenText      string
+}
+
+// SuppressActivityFor temporarily suppresses false-positive unread activity (e.g. after focus-out \x1b[O, resize SIGWINCH, or restore)
+func (p *TerminalPane) SuppressActivityFor(d time.Duration) {
+	if p == nil {
+		return
+	}
+	until := time.Now().Add(d)
+	if until.After(p.ignoreActivityUntil) {
+		p.ignoreActivityUntil = until
+	}
+	if p.Terminal != nil {
+		p.lastScreenText = strings.TrimSpace(p.Terminal.GetVisibleCleanText())
+	}
 }
 
 const (
@@ -384,6 +402,13 @@ func NewTabView() (*TabView, error) {
 		if item == nil && int(pageNum) >= 0 && int(pageNum) < len(tv.items) {
 			item = tv.items[pageNum]
 		}
+		for _, otherItem := range tv.items {
+			if otherItem != item {
+				for _, p := range otherItem.Panes {
+					p.SuppressActivityFor(450 * time.Millisecond)
+				}
+			}
+		}
 		if item != nil {
 			targetPane := item.FocusedPane
 			if targetPane == nil && len(item.Panes) > 0 {
@@ -500,18 +525,41 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	box.PackStart(termHBox, true, true, 0)
 
 	pane := &TerminalPane{
-		Session:  sess,
-		Terminal: term,
-		Box:      box,
-		Search:   searchBar,
-		TabItem:  item,
+		Session:             sess,
+		Terminal:            term,
+		Box:                 box,
+		Search:              searchBar,
+		TabItem:             item,
+		HasUnsavedChanges:   true,
+		ignoreActivityUntil: time.Now().Add(1500 * time.Millisecond),
 	}
 
 	term.OnContentsChanged = func() {
-		if pane == nil || pane.TabItem == nil || pane.HasUnreadActivity {
+		if pane == nil || pane.TabItem == nil {
 			return
 		}
-		if !tv.isPaneFocused(pane) {
+		if tv.isPaneFocused(pane) {
+			// Active (green) pane: mark dirty for delta session save without heavy text extraction
+			pane.HasUnsavedChanges = true
+			return
+		}
+		// Unfocused pane: ignore TUI redraws caused by focus-out (\x1b[O), resize (SIGWINCH), or initial restore
+		if time.Now().Before(pane.ignoreActivityUntil) {
+			if pane.Terminal != nil {
+				pane.lastScreenText = strings.TrimSpace(pane.Terminal.GetVisibleCleanText())
+			}
+			return
+		}
+		// Verify visible screen text actually changed (filters out pure ANSI cursor/attribute/status redraws in idle TUIs)
+		if pane.Terminal != nil {
+			vis := strings.TrimSpace(pane.Terminal.GetVisibleCleanText())
+			if vis == pane.lastScreenText {
+				return
+			}
+			pane.lastScreenText = vis
+		}
+		pane.HasUnsavedChanges = true
+		if !pane.HasUnreadActivity {
 			pane.HasUnreadActivity = true
 			tv.UpdateTabTitle(pane.TabItem)
 		}
@@ -522,6 +570,9 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		btnEvent := gdk.EventButtonNewFromEvent(event)
 		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
+			if pane.TabItem.FocusedPane != nil && pane.TabItem.FocusedPane != pane {
+				pane.TabItem.FocusedPane.SuppressActivityFor(450 * time.Millisecond)
+			}
 			pane.TabItem.FocusedPane = pane
 			tv.UpdatePaneBorders(pane.TabItem)
 		}
@@ -545,6 +596,9 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	term.Widget.Connect("focus-in-event", func() {
 		wasFocused := pane.TabItem != nil && pane.TabItem.FocusedPane == pane
 		if pane.TabItem != nil {
+			if pane.TabItem.FocusedPane != nil && pane.TabItem.FocusedPane != pane {
+				pane.TabItem.FocusedPane.SuppressActivityFor(450 * time.Millisecond)
+			}
 			pane.TabItem.FocusedPane = pane
 			tv.UpdatePaneBorders(pane.TabItem)
 		}
@@ -560,6 +614,21 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 		}
 	})
 
+	term.Widget.Connect("focus-out-event", func() {
+		pane.SuppressActivityFor(450 * time.Millisecond)
+	})
+
+	lastRows, lastCols := 0, 0
+	term.Widget.Connect("size-allocate", func() {
+		if pane.Terminal != nil {
+			r, c := pane.Terminal.GetRowCount(), pane.Terminal.GetColumnCount()
+			if (r != lastRows || c != lastCols) && (lastRows > 0 || lastCols > 0) {
+				pane.SuppressActivityFor(450 * time.Millisecond)
+			}
+			lastRows, lastCols = r, c
+		}
+	})
+
 	// Linux-style unfocused hover scrolling:
 	// If the terminal pane does not have keyboard focus, but the running application
 	// requested DECSET 1004 focus tracking (e.g. opencode TUI), wake it up with
@@ -567,6 +636,8 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	term.Widget.Connect("scroll-event", func(_ *glib.Object, _ *gdk.Event) bool {
 		if pane.TabItem != nil && pane.TabItem.FocusedPane != pane {
 			if sess != nil && sess.IsFocusTracking() {
+				pane.hoverFocusSent = true
+				pane.SuppressActivityFor(450 * time.Millisecond)
 				pane.Terminal.FeedChild("\x1b[I")
 			}
 		}
@@ -574,9 +645,13 @@ func (tv *TabView) createPane(item *TabItem, sess *session.Session, term *vte.Te
 	})
 
 	term.Widget.Connect("leave-notify-event", func(_ *glib.Object, _ *gdk.Event) bool {
-		if pane.TabItem != nil && pane.TabItem.FocusedPane != pane {
-			if sess != nil && sess.IsFocusTracking() {
-				pane.Terminal.FeedChild("\x1b[O")
+		if pane.hoverFocusSent {
+			pane.hoverFocusSent = false
+			if pane.TabItem != nil && pane.TabItem.FocusedPane != pane {
+				if sess != nil && sess.IsFocusTracking() {
+					pane.SuppressActivityFor(450 * time.Millisecond)
+					pane.Terminal.FeedChild("\x1b[O")
+				}
 			}
 		}
 		return false

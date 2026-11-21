@@ -37,22 +37,85 @@ static char* get_clean_text(VteTerminal* term) {
     return vte_terminal_get_text_format(term, VTE_FORMAT_TEXT);
 }
 
+static char* get_tail_clean_text(VteTerminal* term, glong max_lines) {
+    if (!term) return NULL;
+    if (max_lines <= 0) {
+        return vte_terminal_get_text_format(term, VTE_FORMAT_TEXT);
+    }
+    GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(term));
+    if (!vadj) {
+        return vte_terminal_get_text_format(term, VTE_FORMAT_TEXT);
+    }
+    glong end_row = (glong)gtk_adjustment_get_upper(vadj);
+    glong rows = vte_terminal_get_row_count(term);
+    if (end_row < rows) {
+        end_row = rows;
+    }
+    glong start_row = end_row - max_lines;
+    if (start_row < 0) {
+        start_row = 0;
+    }
+    return vte_terminal_get_text_range_format(term, VTE_FORMAT_TEXT, start_row, 0, end_row, -1, NULL);
+}
+
+static char* get_visible_clean_text(VteTerminal* term) {
+    if (!term) return NULL;
+    glong rows = vte_terminal_get_row_count(term);
+    if (rows <= 0) rows = 24;
+    return get_tail_clean_text(term, rows);
+}
+
+static void scroll_terminal_to_bottom(VteTerminal* term) {
+    if (!term) return;
+    GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(term));
+    if (!vadj) return;
+    gdouble upper = gtk_adjustment_get_upper(vadj);
+    gdouble page_size = gtk_adjustment_get_page_size(vadj);
+    if (upper > page_size) {
+        gtk_adjustment_set_value(vadj, upper - page_size);
+    }
+}
+
+static void on_clipboard_text_received(GtkClipboard* clipboard, const gchar* text, gpointer data) {
+    if (!text || !data) return;
+    GtkWidget* w = (GtkWidget*)data;
+    if (!GTK_IS_WIDGET(w)) {
+        g_object_unref(w);
+        return;
+    }
+    VteTerminal* term = VTE_TERMINAL(w);
+    GString* s = g_string_new(text);
+    g_string_replace(s, "\x1b[200~", "", 0);
+    g_string_replace(s, "\x1b[201~", "", 0);
+    g_string_replace(s, "^[[200~", "", 0);
+    g_string_replace(s, "^[[201~", "", 0);
+
+    scroll_terminal_to_bottom(term);
+    vte_terminal_paste_text(term, s->str);
+    scroll_terminal_to_bottom(term);
+    gtk_widget_queue_draw(w);
+
+    g_string_free(s, TRUE);
+    g_object_unref(w);
+}
+
 static void paste_clean_text(VteTerminal* term, GdkAtom selection) {
+    if (!term) return;
     GtkClipboard* clipboard = gtk_clipboard_get(selection);
     if (!clipboard) return;
 
-    gchar* text = gtk_clipboard_wait_for_text(clipboard);
-    if (text) {
-        GString* s = g_string_new(text);
-        g_string_replace(s, "\x1b[200~", "", 0);
-        g_string_replace(s, "\x1b[201~", "", 0);
-        g_string_replace(s, "^[[200~", "", 0);
-        g_string_replace(s, "^[[201~", "", 0);
+    g_object_ref(G_OBJECT(term));
+    gtk_clipboard_request_text(clipboard, on_clipboard_text_received, (gpointer)term);
+}
 
-        vte_terminal_paste_text(term, s->str);
-        g_string_free(s, TRUE);
-        g_free(text);
-    }
+static void vte_set_disconnected_flag(GtkWidget* w, gboolean disconnected) {
+    if (!w) return;
+    g_object_set_data(G_OBJECT(w), "pac-disconnected", GINT_TO_POINTER(disconnected ? 1 : 0));
+}
+
+static gboolean vte_get_disconnected_flag(GtkWidget* w) {
+    if (!w) return FALSE;
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "pac-disconnected")) != 0;
 }
 
 static void reset_terminal_state(VteTerminal* term) {
@@ -144,6 +207,9 @@ static void on_vte_decrease_font_size(VteTerminal* term, gpointer user_data) {
 static gboolean on_vte_button_press(GtkWidget* widget, GdkEventButton* event, gpointer user_data) {
     // Intercept middle-click paste to prevent bracketed paste markers (^[[200~ / ^[[201~)
     if (event->button == GDK_BUTTON_MIDDLE) {
+        if (!gtk_widget_has_focus(widget)) {
+            gtk_widget_grab_focus(widget);
+        }
         paste_clean_text(VTE_TERMINAL(widget), GDK_SELECTION_PRIMARY);
         return TRUE; // Consume event completely
     }
@@ -174,17 +240,21 @@ static void on_vte_window_title_changed(VteTerminal* term, gpointer user_data) {
 }
 
 static gboolean on_vte_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
-    if (goOnVteKeyPress(widget, event->keyval)) {
-        return TRUE;
+    if (vte_get_disconnected_flag(widget)) {
+        if (goOnVteKeyPress(widget, event->keyval)) {
+            return TRUE;
+        }
     }
 
     // Strip lock modifiers (NumLock GDK_MOD2_MASK, CapsLock, ScrollLock)
     GdkModifierType state = event->state & gtk_accelerator_get_default_mod_mask();
 
     guint latin_keyval = event->keyval;
-    GdkKeymap* keymap = gdk_keymap_get_default();
-    if (keymap) {
-        gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, state, 0, &latin_keyval, NULL, NULL, NULL);
+    if (state & GDK_CONTROL_MASK) {
+        GdkKeymap* keymap = gdk_keymap_get_default();
+        if (keymap) {
+            gdk_keymap_translate_keyboard_state(keymap, event->hardware_keycode, state, 0, &latin_keyval, NULL, NULL, NULL);
+        }
     }
 
     // Ctrl+Shift+V or Shift+Insert: Paste from clipboard with native bracketed paste support
@@ -298,9 +368,10 @@ static void configure_vte_terminal(GtkWidget* w) {
 
     gtk_widget_add_events(w, GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK | GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK);
 
-    vte_terminal_set_mouse_autohide(term, TRUE);
+    vte_terminal_set_mouse_autohide(term, FALSE);
     vte_terminal_set_bold_is_bright(term, TRUE);
     vte_terminal_set_scroll_on_keystroke(term, TRUE);
+    vte_terminal_set_scroll_on_insert(term, TRUE);
     vte_terminal_set_scroll_on_output(term, FALSE);
     vte_terminal_set_scrollback_lines(term, 10000);
     vte_terminal_set_backspace_binding(term, VTE_ERASE_AUTO);
@@ -606,9 +677,17 @@ type Terminal struct {
 // SetDisconnected updates disconnected state and reconnect callback
 func (t *Terminal) SetDisconnected(disconnected bool, onReconnect func()) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.isDisconnected = disconnected
 	t.OnReconnect = onReconnect
+	w := t.vteWidget
+	t.mu.Unlock()
+	if w != nil {
+		var cFlag C.gboolean = C.FALSE
+		if disconnected {
+			cFlag = C.TRUE
+		}
+		C.vte_set_disconnected_flag(w, cFlag)
+	}
 }
 
 // IsDisconnected returns true if terminal is currently waiting for reconnect
@@ -758,6 +837,32 @@ func (t *Terminal) GetCleanText() string {
 		return ""
 	}
 	cStr := C.get_clean_text(t.vteTerm)
+	if cStr == nil {
+		return ""
+	}
+	defer C.g_free(C.gpointer(cStr))
+	return C.GoString(cStr)
+}
+
+// GetTailCleanText returns only the last maxLines of clean plain-text content from the VTE buffer
+func (t *Terminal) GetTailCleanText(maxLines int) string {
+	if t.vteTerm == nil {
+		return ""
+	}
+	cStr := C.get_tail_clean_text(t.vteTerm, C.glong(maxLines))
+	if cStr == nil {
+		return ""
+	}
+	defer C.g_free(C.gpointer(cStr))
+	return C.GoString(cStr)
+}
+
+// GetVisibleCleanText returns only the currently visible screen rows as clean plain text
+func (t *Terminal) GetVisibleCleanText() string {
+	if t.vteTerm == nil {
+		return ""
+	}
+	cStr := C.get_visible_clean_text(t.vteTerm)
 	if cStr == nil {
 		return ""
 	}
