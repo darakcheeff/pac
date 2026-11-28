@@ -207,9 +207,14 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 		// Dedicated SFTP subsystem connection (isolated so SFTP failures never drop the terminal shell)
 		if host.AutoSFTP {
 			go func() {
-				sftpCtx, sftpCancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer sftpCancel()
-				sftpSSHClient, _, sftpErr := ssh.DialSSH(sftpCtx, host, jumpClient)
+				dialSFTPSSH := func() (*cryptoSsh.Client, error) {
+					sftpCtx, sftpCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer sftpCancel()
+					cl, _, err := ssh.DialSSH(sftpCtx, host, jumpClient)
+					return cl, err
+				}
+
+				sftpSSHClient, sftpErr := dialSFTPSSH()
 				if sftpErr != nil {
 					log.Printf("[SFTP] Dedicated SSH connection failed for %s: %v", host.Name, sftpErr)
 					return
@@ -219,6 +224,15 @@ func StartSessionWithBridge(ctx context.Context, host *storage.Host, title strin
 					log.Printf("[SFTP] SFTP subsystem unavailable for %s: %v", host.Name, err)
 					_ = sftpSSHClient.Close()
 					return
+				}
+				sftpCl.SetReconnectDialer(dialSFTPSSH)
+
+				keepAliveSec := host.SSHKeepAliveInterval
+				if keepAliveSec == 0 {
+					keepAliveSec = 15
+				}
+				if keepAliveSec > 0 && !sshSess.IsROSSSH() {
+					sftpCl.StartKeepAlive(time.Duration(keepAliveSec) * time.Second)
 				}
 				log.Printf("[SFTP] Dedicated SFTP client established for %s (cwd: %s)", host.Name, sftpCl.CurrentDir())
 				sess.mu.Lock()

@@ -41,7 +41,7 @@ import (
 var appIconBytes []byte
 
 // AppVersion represents the current application release/build version
-const AppVersion = "v1.1.2"
+const AppVersion = "v1.1.3"
 
 // AppWindow represents the primary application window
 type AppWindow struct {

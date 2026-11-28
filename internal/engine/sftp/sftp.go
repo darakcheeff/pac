@@ -2,8 +2,11 @@ package sftp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -28,14 +31,20 @@ type FileItem struct {
 // ProgressCallback reports bytes transferred and total size
 type ProgressCallback func(transferred int64, total int64, speedBytesPerSec float64)
 
-// Client wraps pkg/sftp.Client with helper routines
+// DialSSHFunc dials a fresh SSH client for transparent SFTP reconnection.
+type DialSSHFunc func() (*ssh.Client, error)
+
+// Client wraps pkg/sftp.Client with helper routines and automatic reconnection
 type Client struct {
-	sshClient  *ssh.Client
-	sftpClient *sftp.Client
-	isLocal    bool
-	currentDir string
-	mu         sync.RWMutex
-	closed     bool
+	sshClient     *ssh.Client
+	sftpClient    *sftp.Client
+	dialFn        DialSSHFunc
+	keepAliveStop chan struct{}
+	isLocal       bool
+	currentDir    string
+	mu            sync.RWMutex
+	reconnectMu   sync.Mutex
+	closed        bool
 }
 
 // NewLocalClient initializes a Client operating on the local filesystem
@@ -93,6 +102,171 @@ func (c *Client) SetCurrentDir(dir string) {
 	c.currentDir = dir
 }
 
+// SetReconnectDialer configures the SSH dialer used to re-establish a dropped SFTP connection.
+func (c *Client) SetReconnectDialer(fn DialSSHFunc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dialFn = fn
+}
+
+// StartKeepAlive sends periodic SSH keepalive requests on the underlying SFTP SSH connection
+// so NAT/firewalls and sshd idle timeouts do not silently drop the SFTP channel.
+func (c *Client) StartKeepAlive(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	c.mu.Lock()
+	if c.closed || c.isLocal {
+		c.mu.Unlock()
+		return
+	}
+	if c.keepAliveStop != nil {
+		close(c.keepAliveStop)
+	}
+	stopCh := make(chan struct{})
+	c.keepAliveStop = stopCh
+	c.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				c.mu.RLock()
+				closed := c.closed
+				sshCl := c.sshClient
+				c.mu.RUnlock()
+				if closed {
+					return
+				}
+				if sshCl != nil {
+					_, _, _ = sshCl.SendRequest("keepalive@openssh.com", true, nil)
+				}
+			}
+		}
+	}()
+}
+
+func isConnectionLostErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sftp.ErrSSHFxConnectionLost) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection lost") ||
+		strings.Contains(msg, "eof") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "sftp client is closed") ||
+		strings.Contains(msg, "sftp client not connected")
+}
+
+func (c *Client) getRemoteClient() (*sftp.Client, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed {
+		return nil, fmt.Errorf("client is closed")
+	}
+	if c.sftpClient == nil {
+		return nil, fmt.Errorf("sftp client is closed")
+	}
+	return c.sftpClient, nil
+}
+
+// reconnect replaces the dead SFTP/SSH client using dialFn.
+// failedClient prevents redundant reconnects when another goroutine already reconnected.
+func (c *Client) reconnect(failedClient *sftp.Client) (*sftp.Client, error) {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return nil, fmt.Errorf("client is closed")
+	}
+	if c.sftpClient != nil && c.sftpClient != failedClient {
+		current := c.sftpClient
+		c.mu.RUnlock()
+		return current, nil
+	}
+	fn := c.dialFn
+	c.mu.RUnlock()
+
+	if fn == nil {
+		return nil, fmt.Errorf("sftp reconnect not configured")
+	}
+
+	log.Printf("[SFTP] Connection lost; attempting automatic reconnect...")
+	newSSH, err := fn()
+	if err != nil {
+		return nil, err
+	}
+	newSFTP, err := sftp.NewClient(newSSH)
+	if err != nil {
+		_ = newSSH.Close()
+		return nil, err
+	}
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		if newSFTP != nil {
+			_ = newSFTP.Close()
+		}
+		if newSSH != nil {
+			_ = newSSH.Close()
+		}
+		return nil, fmt.Errorf("client is closed")
+	}
+	oldSFTP := c.sftpClient
+	oldSSH := c.sshClient
+	c.sftpClient = newSFTP
+	c.sshClient = newSSH
+	c.mu.Unlock()
+
+	if oldSFTP != nil {
+		_ = oldSFTP.Close()
+	}
+	if oldSSH != nil {
+		_ = oldSSH.Close()
+	}
+	log.Printf("[SFTP] Automatic reconnect succeeded")
+	return newSFTP, nil
+}
+
+func (c *Client) withReconnect(op func(*sftp.Client) error) error {
+	sc, err := c.getRemoteClient()
+	if err != nil {
+		if !isConnectionLostErr(err) {
+			return err
+		}
+		sc, recErr := c.reconnect(nil)
+		if recErr != nil {
+			return err
+		}
+		return op(sc)
+	}
+
+	err = op(sc)
+	if err != nil && isConnectionLostErr(err) {
+		newSC, recErr := c.reconnect(sc)
+		if recErr != nil {
+			return err
+		}
+		return op(newSC)
+	}
+	return err
+}
+
 // resolvePath expands ~ and ~/ based on current or home directory
 func (c *Client) resolvePath(remotePath string) string {
 	if remotePath == "" {
@@ -132,15 +306,15 @@ func (c *Client) resolvePath(remotePath string) string {
 // ListDir returns list of files/folders in remote directory
 func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	if c.closed {
+		c.mu.RUnlock()
 		return nil, fmt.Errorf("client is closed")
 	}
-
 	remotePath = c.resolvePath(remotePath)
+	isLocal := c.isLocal
+	c.mu.RUnlock()
 
-	if c.isLocal {
+	if isLocal {
 		entries, err := os.ReadDir(remotePath)
 		if err != nil {
 			return nil, err
@@ -163,11 +337,12 @@ func (c *Client) ListDir(remotePath string) ([]FileItem, error) {
 		return items, nil
 	}
 
-	if c.sftpClient == nil {
-		return nil, fmt.Errorf("sftp client is closed")
-	}
-
-	entries, err := c.sftpClient.ReadDir(remotePath)
+	var entries []os.FileInfo
+	err := c.withReconnect(func(sc *sftp.Client) error {
+		var rErr error
+		entries, rErr = sc.ReadDir(remotePath)
+		return rErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +371,6 @@ func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string,
 
 	remotePath = c.resolvePath(remotePath)
 	isLocal := c.isLocal
-	sftpClient := c.sftpClient
 	c.mu.RUnlock()
 
 	if isLocal {
@@ -220,21 +394,26 @@ func (c *Client) DownloadFile(ctx context.Context, remotePath, localPath string,
 		return copyWithProgress(ctx, dst, src, stat.Size(), cb)
 	}
 
-	if sftpClient == nil {
-		return fmt.Errorf("sftp client is closed")
-	}
-
-	src, err := sftpClient.Open(remotePath)
+	var src *sftp.File
+	var totalSize int64
+	err := c.withReconnect(func(sc *sftp.Client) error {
+		f, oErr := sc.Open(remotePath)
+		if oErr != nil {
+			return oErr
+		}
+		stat, sErr := f.Stat()
+		if sErr != nil {
+			_ = f.Close()
+			return sErr
+		}
+		src = f
+		totalSize = stat.Size()
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("failed to open remote file: %w", err)
 	}
 	defer src.Close()
-
-	stat, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	totalSize := stat.Size()
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		return err
@@ -259,12 +438,7 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 
 	remotePath = c.resolvePath(remotePath)
 	isLocal := c.isLocal
-	sftpClient := c.sftpClient
 	c.mu.RUnlock()
-
-	if !isLocal && sftpClient == nil {
-		return fmt.Errorf("sftp client is closed")
-	}
 
 	src, err := os.Open(localPath)
 	if err != nil {
@@ -290,7 +464,15 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 		return copyWithProgress(ctx, dst, src, totalSize, cb)
 	}
 
-	dst, err := sftpClient.Create(remotePath)
+	var dst *sftp.File
+	err = c.withReconnect(func(sc *sftp.Client) error {
+		f, cErr := sc.Create(remotePath)
+		if cErr != nil {
+			return cErr
+		}
+		dst = f
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %w", err)
 	}
@@ -302,87 +484,84 @@ func (c *Client) UploadFile(ctx context.Context, localPath, remotePath string, c
 // Mkdir creates remote directory
 func (c *Client) Mkdir(remotePath string) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	remotePath = c.resolvePath(remotePath)
-	if c.isLocal {
+	isLocal := c.isLocal
+	c.mu.RUnlock()
+	if isLocal {
 		return os.MkdirAll(remotePath, 0755)
 	}
-	if c.sftpClient == nil {
-		return fmt.Errorf("sftp client not connected")
-	}
-	return c.sftpClient.MkdirAll(remotePath)
+	return c.withReconnect(func(sc *sftp.Client) error {
+		return sc.MkdirAll(remotePath)
+	})
 }
 
 // Remove deletes remote file or directory (recursively if non-empty)
 func (c *Client) Remove(remotePath string) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	remotePath = c.resolvePath(remotePath)
-	if c.isLocal {
+	isLocal := c.isLocal
+	c.mu.RUnlock()
+	if isLocal {
 		return os.RemoveAll(remotePath)
 	}
-	if c.sftpClient == nil {
-		return fmt.Errorf("sftp client not connected")
-	}
-	err := c.sftpClient.Remove(remotePath)
-	if err == nil {
-		return nil
-	}
-	errDir := c.sftpClient.RemoveDirectory(remotePath)
-	if errDir == nil {
-		return nil
-	}
-	return c.removeRecursive(remotePath)
+	return c.withReconnect(func(sc *sftp.Client) error {
+		if err := sc.Remove(remotePath); err == nil {
+			return nil
+		}
+		if errDir := sc.RemoveDirectory(remotePath); errDir == nil {
+			return nil
+		}
+		return removeRecursiveWithClient(sc, remotePath)
+	})
 }
 
-func (c *Client) removeRecursive(remotePath string) error {
-	remotePath = c.resolvePath(remotePath)
-	entries, err := c.sftpClient.ReadDir(remotePath)
+func removeRecursiveWithClient(sc *sftp.Client, remotePath string) error {
+	entries, err := sc.ReadDir(remotePath)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		subPath := path.Join(remotePath, entry.Name())
 		if entry.IsDir() {
-			if err := c.removeRecursive(subPath); err != nil {
+			if err := removeRecursiveWithClient(sc, subPath); err != nil {
 				return err
 			}
 		} else {
-			if err := c.sftpClient.Remove(subPath); err != nil {
+			if err := sc.Remove(subPath); err != nil {
 				return err
 			}
 		}
 	}
-	return c.sftpClient.RemoveDirectory(remotePath)
+	return sc.RemoveDirectory(remotePath)
 }
 
 // Rename renames or moves remote file
 func (c *Client) Rename(oldPath, newPath string) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	oldPath = c.resolvePath(oldPath)
 	newPath = c.resolvePath(newPath)
-	if c.isLocal {
+	isLocal := c.isLocal
+	c.mu.RUnlock()
+	if isLocal {
 		return os.Rename(oldPath, newPath)
 	}
-	if c.sftpClient == nil {
-		return fmt.Errorf("sftp client not connected")
-	}
-	return c.sftpClient.Rename(oldPath, newPath)
+	return c.withReconnect(func(sc *sftp.Client) error {
+		return sc.Rename(oldPath, newPath)
+	})
 }
 
 // Chmod updates file permissions
 func (c *Client) Chmod(remotePath string, mode os.FileMode) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	remotePath = c.resolvePath(remotePath)
-	if c.isLocal {
+	isLocal := c.isLocal
+	c.mu.RUnlock()
+	if isLocal {
 		return os.Chmod(remotePath, mode)
 	}
-	if c.sftpClient == nil {
-		return fmt.Errorf("sftp client not connected")
-	}
-	return c.sftpClient.Chmod(remotePath, mode)
+	return c.withReconnect(func(sc *sftp.Client) error {
+		return sc.Chmod(remotePath, mode)
+	})
 }
 
 // Close closes the SFTP client
@@ -393,6 +572,10 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.keepAliveStop != nil {
+		close(c.keepAliveStop)
+		c.keepAliveStop = nil
+	}
 	sftpClient := c.sftpClient
 	sshClient := c.sshClient
 	c.mu.Unlock()
